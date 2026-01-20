@@ -1,3 +1,14 @@
+# SPDX-License-Identifier: LicenseRef-Rateslib-Dual
+#
+# Copyright (c) 2026 Siffrorna Technology Limited
+#
+# Dual-licensed: Free Educational Licence or Paid Commercial Licence (commercial/professional use)
+# Source-available, not open source.
+#
+# See LICENSE and https://rateslib.com/py/en/latest/i_licence.html for details,
+# and/or contact info (at) rateslib (dot) com
+####################################################################################################
+
 from __future__ import annotations
 
 import os
@@ -41,7 +52,7 @@ if DEVELOPMENT:
             # TODO (low): clean this up when setting a minimum pandas version at 2.1.0
             df[df["dtype"] == "bool"] = df[df["dtype"] == "bool"].map(_map_true_false)
         else:
-            df[df["dtype"] == "bool"] = df[df["dtype"] == "bool"].applymap(_map_true_false)  # type: ignore[operator]
+            df[df["dtype"] == "bool"] = df[df["dtype"] == "bool"].applymap(_map_true_false)  # type: ignore[operator, index]
         return df
 
     path = "data/__instrument_spec.csv"
@@ -90,7 +101,7 @@ if DEVELOPMENT:
             d["roll"] = _map_str_int(d["roll"])
         if "leg2_roll" in d:
             d["leg2_roll"] = _map_str_int(d["leg2_roll"])
-        return d
+        return d  # type: ignore[return-value]
 
     INSTRUMENT_SPECS = {k: _get_kwargs(k) for k in df.columns[4:]}
 
@@ -105,7 +116,7 @@ else:
             "calendar": "nyc,tgt,ldn",
             "payment_lag": 4,
             "currency": "tes",
-            "convention": "test",
+            "convention": "yearsmonths",
             "leg2_frequency": "m",
             "leg2_stub": "longback",
             "leg2_roll": 1,
@@ -113,7 +124,14 @@ else:
             "leg2_modifier": "mp",
             "leg2_calendar": "nyc,tgt,ldn",
             "leg2_payment_lag": 3,
-            "leg2_convention": "test2",
+            "leg2_convention": "one",
+        },
+        "eurusd_call": {
+            "modifier": "mf",
+            "calendar": "tgt|fed",
+            "payment_lag": 2,
+            "pair": "eurusd",
+            "delivery_lag": 2,
         },
         "us_ig_cds": {
             "frequency": "q",
@@ -126,6 +144,36 @@ else:
             "currency": "usd",
             "convention": "act360",
             "fixed_rate": 1.0,
+        },
+        "inr_ndirs": {
+            "frequency": "s",
+            "stub": "shortfront",
+            "eom": False,
+            "modifier": "mf",
+            "calendar": "mum",
+            "payment_lag": 0,
+            "currency": "usd",
+            "convention": "act365f",
+            "leg2_spread_compound_method": "none_simple",
+            "leg2_fixing_method": "rfr_payment_delay",
+            "leg2_method_param": 0,
+            "pair": "usdinr",
+        },
+        "inrusd_ndxcs": {
+            "frequency": "s",
+            "stub": "shortfront",
+            "eom": False,
+            "modifier": "mf",
+            "calendar": "mum|fed",
+            "payment_lag": 2,
+            "currency": "usd",
+            "convention": "act365f",
+            "leg2_convention": "act360",
+            "leg2_spread_compound_method": "none_simple",
+            "leg2_fixing_method": "rfr_payment_delay",
+            "leg2_method_param": 0,
+            "fixed": True,
+            "pair": "usdinr",
         },
         "usd_irs": {
             "frequency": "a",
@@ -448,7 +496,6 @@ else:
             "payment_lag": 2,
             "currency": "eur",
             "convention": "act360",
-            "leg2_currency": "usd",
             "spread_compound_method": "none_simple",
             "fixing_method": "rfr_payment_delay",
             "method_param": 0,
@@ -459,6 +506,7 @@ else:
             "fixed": False,
             "leg2_fixed": False,
             "leg2_mtm": True,
+            "pair": "eurusd",
         },
         "gbpusd_xcs": {
             "frequency": "q",
@@ -469,7 +517,6 @@ else:
             "payment_lag": 2,
             "currency": "gbp",
             "convention": "act365f",
-            "leg2_currency": "usd",
             "leg2_convention": "act360",
             "spread_compound_method": "none_simple",
             "fixing_method": "rfr_payment_delay",
@@ -481,6 +528,7 @@ else:
             "fixed": False,
             "leg2_fixed": False,
             "leg2_mtm": True,
+            "pair": "gbpusd",
         },
         "eurgbp_xcs": {
             "frequency": "q",
@@ -491,7 +539,6 @@ else:
             "payment_lag": 2,
             "currency": "eur",
             "convention": "act360",
-            "leg2_currency": "gbp",
             "leg2_convention": "act365f",
             "spread_compound_method": "none_simple",
             "fixing_method": "rfr_payment_delay",
@@ -503,6 +550,7 @@ else:
             "fixed": False,
             "leg2_fixed": False,
             "leg2_mtm": True,
+            "pair": "eurgbp",
         },
         "gbpeur_xcs": {
             "frequency": "q",
@@ -513,7 +561,6 @@ else:
             "payment_lag": 2,
             "currency": "gbp",
             "convention": "act365f",
-            "leg2_currency": "eur",
             "leg2_convention": "act360",
             "spread_compound_method": "none_simple",
             "fixing_method": "rfr_payment_delay",
@@ -525,6 +572,7 @@ else:
             "fixed": False,
             "leg2_fixed": False,
             "leg2_mtm": True,
+            "pair": "eurgbp",
         },
         "jpyusd_xcs": {
             "frequency": "q",
@@ -535,7 +583,6 @@ else:
             "payment_lag": 2,
             "currency": "jpy",
             "convention": "act365f",
-            "leg2_currency": "usd",
             "leg2_convention": "act360",
             "spread_compound_method": "none_simple",
             "fixing_method": "rfr_payment_delay",
@@ -547,6 +594,7 @@ else:
             "fixed": False,
             "leg2_fixed": False,
             "leg2_mtm": True,
+            "pair": "usdjpy",
         },
         "audusd_xcs3": {
             "frequency": "q",
@@ -557,7 +605,6 @@ else:
             "payment_lag": 2,
             "currency": "aud",
             "convention": "act365f",
-            "leg2_currency": "usd",
             "leg2_convention": "act360",
             "spread_compound_method": "none_simple",
             "fixing_method": "ibor",
@@ -569,6 +616,7 @@ else:
             "fixed": False,
             "leg2_fixed": False,
             "leg2_mtm": True,
+            "pair": "audusd",
         },
         "audusd_xcs": {
             "frequency": "q",
@@ -579,7 +627,6 @@ else:
             "payment_lag": 2,
             "currency": "aud",
             "convention": "act365f",
-            "leg2_currency": "usd",
             "leg2_convention": "act360",
             "spread_compound_method": "none_simple",
             "fixing_method": "rfr_payment_delay",
@@ -591,6 +638,7 @@ else:
             "fixed": False,
             "leg2_fixed": False,
             "leg2_mtm": True,
+            "pair": "audusd",
         },
         "nzdusd_xcs3": {
             "frequency": "q",
@@ -601,7 +649,6 @@ else:
             "payment_lag": 2,
             "currency": "nzd",
             "convention": "act365f",
-            "leg2_currency": "usd",
             "leg2_convention": "act360",
             "spread_compound_method": "none_simple",
             "fixing_method": "ibor",
@@ -613,6 +660,7 @@ else:
             "fixed": False,
             "leg2_fixed": False,
             "leg2_mtm": True,
+            "pair": "nzdusd",
         },
         "nzdaud_xcs3": {
             "frequency": "q",
@@ -623,7 +671,6 @@ else:
             "payment_lag": 2,
             "currency": "nzd",
             "convention": "act365f",
-            "leg2_currency": "aud",
             "leg2_convention": "act365f",
             "spread_compound_method": "none_simple",
             "fixing_method": "ibor",
@@ -635,6 +682,7 @@ else:
             "fixed": False,
             "leg2_fixed": False,
             "leg2_mtm": True,
+            "pair": "audnzd",
         },
         "eur_zcis": {
             "frequency": "a",
@@ -744,7 +792,7 @@ else:
             "calendar": "syd",
             "payment_lag": 0,
             "currency": "aud",
-            "convention": "act365",
+            "convention": "act365f",
             "leg2_frequency": "s",
             "spread_compound_method": "none_simple",
             "fixing_method": "ibor",
@@ -761,7 +809,7 @@ else:
             "calendar": "syd",
             "payment_lag": 0,
             "currency": "aud",
-            "convention": "act365",
+            "convention": "act365f",
             "leg2_frequency": "m",
             "spread_compound_method": "none_simple",
             "fixing_method": "ibor",
@@ -778,7 +826,7 @@ else:
             "calendar": "wlg",
             "payment_lag": 0,
             "currency": "nzd",
-            "convention": "act365",
+            "convention": "act365f",
             "leg2_frequency": "s",
             "spread_compound_method": "none_simple",
             "fixing_method": "ibor",
@@ -795,7 +843,7 @@ else:
             "calendar": "wlg",
             "payment_lag": 0,
             "currency": "nzd",
-            "convention": "act365",
+            "convention": "act365f",
             "leg2_frequency": "m",
             "spread_compound_method": "none_simple",
             "fixing_method": "ibor",
@@ -814,6 +862,22 @@ else:
             "currency": "usd",
             "convention": "actacticma",
             "payment_lag_exchange": 0,
+            "settle": 1,
+            "ex_div": 1,
+            "calc_mode": "us_gb",
+        },
+        "us_gbi": {
+            "frequency": "s",
+            "stub": "shortfront",
+            "eom": True,
+            "modifier": "none",
+            "calendar": "nyc",
+            "payment_lag": 0,
+            "currency": "usd",
+            "convention": "actacticma",
+            "payment_lag_exchange": 0,
+            "index_method": "daily",
+            "index_lag": 3,
             "settle": 1,
             "ex_div": 1,
             "calc_mode": "us_gb",
@@ -862,7 +926,7 @@ else:
         },
         "uk_gb": {
             "frequency": "s",
-            "stub": "shortfront",
+            "stub": "longfront",
             "eom": False,
             "modifier": "none",
             "calendar": "ldn",
@@ -873,6 +937,20 @@ else:
             "settle": 1,
             "ex_div": 7,
             "calc_mode": "uk_gb",
+        },
+        "nz_gb": {
+            "frequency": "s",
+            "stub": "shortfront",
+            "eom": False,
+            "modifier": "none",
+            "calendar": "wlg",
+            "payment_lag": 0,
+            "currency": "nzd",
+            "convention": "actacticma",
+            "payment_lag_exchange": 0,
+            "settle": 1,
+            "ex_div": 8,
+            "calc_mode": "nz_gb",
         },
         "de_gb": {
             "frequency": "a",
@@ -1138,11 +1216,11 @@ else:
             "calendar": "nyc",
             "payment_lag": 0,
             "currency": "usd",
-            "convention": "act360",
+            "convention": "actacticma",
             "leg2_spread_compound_method": "none_simple",
             "leg2_fixing_method": "rfr_payment_delay",
             "leg2_method_param": 0,
-            "bp_value": 25.0,
+            "leg2_fixing_series": "usd_rfr",
             "nominal": 1000000.0,
         },
         "usd_stir1": {
@@ -1153,12 +1231,12 @@ else:
             "calendar": "nyc",
             "payment_lag": 0,
             "currency": "usd",
-            "convention": "act360",
+            "convention": "actacticma",
             "leg2_spread_compound_method": "none_simple",
             "leg2_fixing_method": "rfr_payment_delay_avg",
             "leg2_method_param": 0,
-            "bp_value": 41.67,
-            "nominal": 5000000.0,
+            "leg2_fixing_series": "usd_rfr",
+            "nominal": 5000400.0,
         },
         "eur_stir": {
             "frequency": "q",
@@ -1168,11 +1246,11 @@ else:
             "calendar": "tgt",
             "payment_lag": 0,
             "currency": "eur",
-            "convention": "act360",
+            "convention": "actacticma",
             "leg2_spread_compound_method": "none_simple",
             "leg2_fixing_method": "rfr_payment_delay",
             "leg2_method_param": 0,
-            "bp_value": 25.0,
+            "leg2_fixing_series": "eur_rfr",
             "nominal": 1000000.0,
         },
         "eur_stir1": {
@@ -1183,11 +1261,11 @@ else:
             "calendar": "tgt",
             "payment_lag": 0,
             "currency": "eur",
-            "convention": "act360",
+            "convention": "actacticma",
             "leg2_spread_compound_method": "none_simple",
             "leg2_fixing_method": "rfr_payment_delay_avg",
             "leg2_method_param": 0,
-            "bp_value": 25.0,
+            "leg2_fixing_series": "eur_rfr",
             "nominal": 3000000.0,
         },
         "eur_stir3": {
@@ -1198,11 +1276,11 @@ else:
             "calendar": "tgt",
             "payment_lag": 0,
             "currency": "eur",
-            "convention": "act360",
+            "convention": "actacticma",
             "leg2_spread_compound_method": "none_simple",
             "leg2_fixing_method": "ibor",
             "leg2_method_param": 2,
-            "bp_value": 25.0,
+            "leg2_fixing_series": "eur_ibor",
             "nominal": 1000000.0,
         },
         "gbp_stir": {
@@ -1213,12 +1291,40 @@ else:
             "calendar": "ldn",
             "payment_lag": 0,
             "currency": "gbp",
-            "convention": "act365f",
+            "convention": "actacticma",
             "leg2_spread_compound_method": "none_simple",
             "leg2_fixing_method": "rfr_payment_delay",
             "leg2_method_param": 0,
-            "bp_value": 25.0,
+            "leg2_fixing_series": "gbp_rfr",
             "nominal": 1000000.0,
+        },
+        "uk_gb_2y": {
+            "calendar": "ldn",
+            "currency": "gbp",
+            "calc_mode": "ice_gbp",
+            "nominal": 100000.0,
+            "coupon": 3.0,
+        },
+        "uk_gb_5y": {
+            "calendar": "ldn",
+            "currency": "gbp",
+            "calc_mode": "ice_gbp",
+            "nominal": 100000.0,
+            "coupon": 4.0,
+        },
+        "uk_gb_10y": {
+            "calendar": "ldn",
+            "currency": "gbp",
+            "calc_mode": "ice_gbp",
+            "nominal": 100000.0,
+            "coupon": 4.0,
+        },
+        "uk_gb_30y": {
+            "calendar": "ldn",
+            "currency": "gbp",
+            "calc_mode": "ice_gbp",
+            "nominal": 100000.0,
+            "coupon": 4.0,
         },
         "us_gb_2y": {
             "calendar": "fed",

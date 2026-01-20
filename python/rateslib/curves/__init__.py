@@ -1,3 +1,14 @@
+# SPDX-License-Identifier: LicenseRef-Rateslib-Dual
+#
+# Copyright (c) 2026 Siffrorna Technology Limited
+#
+# Dual-licensed: Free Educational Licence or Paid Commercial Licence (commercial/professional use)
+# Source-available, not open source.
+#
+# See LICENSE and https://rateslib.com/py/en/latest/i_licence.html for details,
+# and/or contact info (at) rateslib (dot) com
+####################################################################################################
+
 from rateslib.curves.curves import (
     CompositeCurve,
     CreditImpliedCurve,
@@ -25,12 +36,18 @@ from rateslib.curves.utils import (
 )
 
 __all__ = (
-    "CompositeCurve",
     "Curve",
     "LineCurve",
+    "CompositeCurve",
     "MultiCsaCurve",
     "ProxyCurve",
     "CreditImpliedCurve",
+    "RolledCurve",
+    "ShiftedCurve",
+    "TranslatedCurve",
+    "_BaseCurve",
+    "_WithOperations",
+    "_WithMutability",
     "average_rate",
     "index_left",
     "index_value",
@@ -40,10 +57,4 @@ __all__ = (
     "_CurveInterpolator",
     "_CurveNodes",
     "_ProxyCurveInterpolator",
-    "RolledCurve",
-    "ShiftedCurve",
-    "TranslatedCurve",
-    "_WithOperations",
-    "_BaseCurve",
-    "_WithMutability",
 )

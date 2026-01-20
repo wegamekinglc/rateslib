@@ -1,3 +1,14 @@
+# SPDX-License-Identifier: LicenseRef-Rateslib-Dual
+#
+# Copyright (c) 2026 Siffrorna Technology Limited
+#
+# Dual-licensed: Free Educational Licence or Paid Commercial Licence (commercial/professional use)
+# Source-available, not open source.
+#
+# See LICENSE and https://rateslib.com/py/en/latest/i_licence.html for details,
+# and/or contact info (at) rateslib (dot) com
+####################################################################################################
+
 import math
 from statistics import NormalDist
 
@@ -174,6 +185,14 @@ def test_gradient_method(vars_, expected, x_1, y_2) -> None:
 
     result = gradient(y_2, vars_)
     assert np.all(result == expected)
+
+
+def test_gradient_on_float():
+    result = gradient(1.0, ["v0", "s"])
+    assert np.all(result == np.array([0.0, 0.0]))
+
+    result = gradient(1.0, ["s"], order=2)
+    assert np.all(result == np.array([[0.0, 0.0], [0.0, 0.0]]))
 
 
 @pytest.mark.parametrize(
@@ -752,13 +771,15 @@ def test_perturbation_confusion() -> None:
     # Utilised tagged variables
     x = Dual(1.0, ["x"], [])
     y = Dual(1.0, ["y"], [])
-    result = gradient(x * gradient(x + y, ["y"]), ["x"])
+    z = gradient(x + y, ["y"])[0]
+    result = gradient(x * z, ["x"])
     assert result == 1.0
 
     # Replicates untagged variables
     x = Dual(1.0, ["x"], [])
     y = Dual(1.0, ["x"], [])
-    result = gradient(x * gradient(x + y, ["x"]), ["x"])
+    z = gradient(x + y, ["x"])[0]
+    result = gradient(x * z, ["x"])
     assert result == 2.0
 
 
@@ -1172,8 +1193,8 @@ class TestVariable:
         result = irs.exo_delta(vars=["N", "R", "z"], vars_scalar=[1.0, 0.01, 1.0], solver=solver)
 
         exp0 = irs.npv(solver=solver) / 5e6
-        exp1 = irs.analytic_delta(curve)
-        exp2 = irs.analytic_delta(curve, leg=2)
+        exp1 = irs.analytic_delta(curves=curve)
+        exp2 = irs.analytic_delta(curves=curve, leg=2)
 
         assert abs(exp0 - result.iloc[0, 0]) < 1e-8
         assert abs(exp1 + result.iloc[1, 0]) < 1e-8

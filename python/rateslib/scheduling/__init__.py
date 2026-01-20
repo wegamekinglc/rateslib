@@ -1,8 +1,20 @@
+# SPDX-License-Identifier: LicenseRef-Rateslib-Dual
+#
+# Copyright (c) 2026 Siffrorna Technology Limited
+#
+# Dual-licensed: Free Educational Licence or Paid Commercial Licence (commercial/professional use)
+# Source-available, not open source.
+#
+# See LICENSE and https://rateslib.com/py/en/latest/i_licence.html for details,
+# and/or contact info (at) rateslib (dot) com
+####################################################################################################
+
 from __future__ import annotations
 
 import rateslib.rs
 from rateslib.rs import Adjuster, Cal, Frequency, Imm, NamedCal, RollDay, StubInference, UnionCal
 from rateslib.scheduling.calendars import get_calendar
+from rateslib.scheduling.convention import Convention
 from rateslib.scheduling.dcfs import dcf
 from rateslib.scheduling.frequency import add_tenor
 from rateslib.scheduling.imm import get_imm, next_imm
@@ -25,6 +37,7 @@ rateslib.rs.PyAdjuster_BusDaysLagSettle = rateslib.rs.Adjuster.BusDaysLagSettle 
 rateslib.rs.PyAdjuster_CalDaysLagSettle = rateslib.rs.Adjuster.CalDaysLagSettle  # type: ignore[attr-defined]
 rateslib.rs.PyAdjuster_FollowingExLast = rateslib.rs.Adjuster.FollowingExLast  # type: ignore[attr-defined]
 rateslib.rs.PyAdjuster_FollowingExLastSettle = rateslib.rs.Adjuster.FollowingExLastSettle  # type: ignore[attr-defined]
+rateslib.rs.PyAdjuster_BusDaysLagSettleInAdvance = rateslib.rs.Adjuster.BusDaysLagSettleInAdvance  # type: ignore[attr-defined]
 
 rateslib.rs.Frequency_CalDays = rateslib.rs.Frequency.CalDays  # type: ignore[attr-defined]
 rateslib.rs.Frequency_BusDays = rateslib.rs.Frequency.BusDays  # type: ignore[attr-defined]
@@ -148,17 +161,18 @@ Examples
 
 __all__ = (
     "Schedule",
-    "add_tenor",
-    "Adjuster",
-    "Frequency",
-    "StubInference",
-    "Imm",
     "Cal",
-    "dcf",
     "NamedCal",
-    "RollDay",
     "UnionCal",
+    "Adjuster",
+    "Convention",
+    "Frequency",
+    "Imm",
+    "RollDay",
+    "StubInference",
+    "add_tenor",
     "get_calendar",
     "get_imm",
     "next_imm",
+    "dcf",
 )

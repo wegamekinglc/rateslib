@@ -1,3 +1,15 @@
+# SPDX-License-Identifier: LicenseRef-Rateslib-Dual
+#
+# Copyright (c) 2026 Siffrorna Technology Limited
+#
+# Dual-licensed: Free Educational Licence or Paid Commercial Licence (commercial/professional use)
+# Source-available, not open source.
+#
+# See LICENSE and https://rateslib.com/py/en/latest/i_licence.html for details,
+# and/or contact info (at) rateslib (dot) com
+####################################################################################################
+
+
 from __future__ import annotations
 
 import json
@@ -8,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from rateslib import defaults
-from rateslib.default import NoInput
+from rateslib.enums.generics import NoInput
 from rateslib.rs import Dual, Dual2
 
 if TYPE_CHECKING:

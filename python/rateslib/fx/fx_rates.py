@@ -1,3 +1,15 @@
+# SPDX-License-Identifier: LicenseRef-Rateslib-Dual
+#
+# Copyright (c) 2026 Siffrorna Technology Limited
+#
+# Dual-licensed: Free Educational Licence or Paid Commercial Licence (commercial/professional use)
+# Source-available, not open source.
+#
+# See LICENSE and https://rateslib.com/py/en/latest/i_licence.html for details,
+# and/or contact info (at) rateslib (dot) com
+####################################################################################################
+
+
 from __future__ import annotations
 
 import warnings
@@ -9,13 +21,13 @@ import numpy as np
 from pandas import DataFrame, Series
 
 from rateslib import defaults
+from rateslib.data.fixings import FXIndex
 from rateslib.default import (
-    NoInput,
-    _drb,
     _make_py_json,
 )
 from rateslib.dual import Dual, gradient
 from rateslib.dual.utils import _get_adorder
+from rateslib.enums.generics import NoInput, _drb
 from rateslib.mutability import (
     _clear_cache_post,
     _new_state_post,
@@ -242,13 +254,13 @@ class FXRates(_WithState):
     def _ad(self) -> int:
         return self.obj.ad
 
-    def rate(self, pair: str) -> Number:
+    def rate(self, pair: FXIndex | str) -> Number:
         """
         Return a specified FX rate for a given currency pair.
 
         Parameters
         ----------
-        pair : str
+        pair : FXIndex, str
             The FX pair in usual domestic:foreign convention (6 digit code).
 
         Returns
@@ -263,6 +275,9 @@ class FXRates(_WithState):
            fxr = FXRates({"usdeur": 2.0, "usdgbp": 2.5})
            fxr.rate("eurgbp")
         """
+        if isinstance(pair, FXIndex):
+            pair = pair.pair
+
         domi, fori = self.currencies[pair[:3].lower()], self.currencies[pair[3:].lower()]
         return self._fx_array_el(domi, fori)
 

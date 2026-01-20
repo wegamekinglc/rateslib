@@ -1,7 +1,18 @@
+# SPDX-License-Identifier: LicenseRef-Rateslib-Dual
+#
+# Copyright (c) 2026 Siffrorna Technology Limited
+#
+# Dual-licensed: Free Educational Licence or Paid Commercial Licence (commercial/professional use)
+# Source-available, not open source.
+#
+# See LICENSE and https://rateslib.com/py/en/latest/i_licence.html for details,
+# and/or contact info (at) rateslib (dot) com
+####################################################################################################
+
 from datetime import datetime as dt
 
 import pytest
-from rateslib.rs import Cal, Frequency, RollDay
+from rateslib.rs import Adjuster, Cal, Frequency, RollDay
 
 
 @pytest.mark.parametrize(
@@ -133,3 +144,9 @@ def test_string():
     assert Frequency.Zero().string() == "Z"
     assert Frequency.CalDays(10).string() == "10D"
     assert Frequency.Months(3, None).string() == "Q"
+
+
+def test_adjuster_reverse():
+    cal = Cal([dt(2010, 1, 1)], [])
+    result = Adjuster.Following().reverse(dt(2010, 1, 2), cal)
+    assert result == [dt(2010, 1, 2), dt(2010, 1, 1)]

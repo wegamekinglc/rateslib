@@ -3,8 +3,11 @@
 
 pub mod all;
 pub mod bus;
+pub mod fed;
 pub mod ldn;
+pub mod mex;
 pub mod mum;
+pub mod nsw;
 pub mod nyc;
 pub mod osl;
 pub mod stk;
@@ -25,7 +28,7 @@ pub(crate) fn get_weekmask_by_name(name: &str) -> Result<Vec<u8>, PyErr> {
         ("all", all::WEEKMASK),
         ("bus", bus::WEEKMASK),
         ("nyc", nyc::WEEKMASK),
-        ("fed", nyc::WEEKMASK),
+        ("fed", fed::WEEKMASK),
         ("tgt", tgt::WEEKMASK),
         ("ldn", ldn::WEEKMASK),
         ("stk", stk::WEEKMASK),
@@ -34,8 +37,10 @@ pub(crate) fn get_weekmask_by_name(name: &str) -> Result<Vec<u8>, PyErr> {
         ("tro", tro::WEEKMASK),
         ("tyo", tyo::WEEKMASK),
         ("syd", syd::WEEKMASK),
+        ("nsw", nsw::WEEKMASK),
         ("wlg", wlg::WEEKMASK),
         ("mum", mum::WEEKMASK),
+        ("mex", mex::WEEKMASK),
     ]);
     match hmap.get(name) {
         None => Err(PyValueError::new_err(format!(
@@ -51,7 +56,7 @@ pub(crate) fn get_holidays_by_name(name: &str) -> Result<Vec<NaiveDateTime>, PyE
         ("all", all::HOLIDAYS),
         ("bus", bus::HOLIDAYS),
         ("nyc", nyc::HOLIDAYS),
-        ("fed", nyc::HOLIDAYS),
+        ("fed", fed::HOLIDAYS),
         ("tgt", tgt::HOLIDAYS),
         ("ldn", ldn::HOLIDAYS),
         ("stk", stk::HOLIDAYS),
@@ -60,8 +65,10 @@ pub(crate) fn get_holidays_by_name(name: &str) -> Result<Vec<NaiveDateTime>, PyE
         ("tro", tro::HOLIDAYS),
         ("tyo", tyo::HOLIDAYS),
         ("syd", syd::HOLIDAYS),
+        ("nsw", nsw::HOLIDAYS),
         ("wlg", wlg::HOLIDAYS),
         ("mum", mum::HOLIDAYS),
+        ("mex", mex::HOLIDAYS),
     ]);
     match hmap.get(name) {
         None => Err(PyValueError::new_err(format!(
@@ -80,7 +87,7 @@ pub(crate) fn get_holidays_by_name(name: &str) -> Result<Vec<NaiveDateTime>, PyE
 //         ("all", all::RULES),
 //         ("bus", bus::RULES),
 //         ("nyc", nyc::RULES),
-//         ("fed", nyc::RULES),
+//         ("fed", fed::RULES),
 //         ("tgt", tgt::RULES),
 //         ("ldn", ldn::RULES),
 //         ("stk", stk::RULES),
@@ -89,8 +96,10 @@ pub(crate) fn get_holidays_by_name(name: &str) -> Result<Vec<NaiveDateTime>, PyE
 //         ("tro", tro::RULES),
 //         ("tyo", tyo::RULES),
 //         ("syd", syd::RULES),
+//         ("nsw", nsw::RULES),
 //         ("wlg", wlg::RULES),
 //         ("mum", mum::RULES),
+//         ("mex", mex::RULES),
 //     ]);
 //     match hmap.get(name) {
 //         None => Err(PyValueError::new_err(format!(

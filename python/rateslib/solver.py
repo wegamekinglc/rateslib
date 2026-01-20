@@ -1,3 +1,14 @@
+# SPDX-License-Identifier: LicenseRef-Rateslib-Dual
+#
+# Copyright (c) 2026 Siffrorna Technology Limited
+#
+# Dual-licensed: Free Educational Licence or Paid Commercial Licence (commercial/professional use)
+# Source-available, not open source.
+#
+# See LICENSE and https://rateslib.com/py/en/latest/i_licence.html for details,
+# and/or contact info (at) rateslib (dot) com
+####################################################################################################
+
 from __future__ import annotations
 
 import warnings
@@ -12,11 +23,20 @@ from pandas import DataFrame, MultiIndex, Series, concat
 from pandas.errors import PerformanceWarning
 
 from rateslib import defaults
-from rateslib.curves import CompositeCurve, Curve, MultiCsaCurve, ProxyCurve, _BaseCurve
-from rateslib.default import NoInput, _drb
+from rateslib.curves import (
+    CompositeCurve,
+    Curve,
+    MultiCsaCurve,
+    ProxyCurve,
+    RolledCurve,
+    ShiftedCurve,
+    TranslatedCurve,
+    _BaseCurve,
+)
 from rateslib.dual import Dual, Dual2, dual_solve, gradient
 from rateslib.dual.newton import _solver_result
 from rateslib.dual.utils import _dual_float
+from rateslib.enums.generics import NoInput, _drb
 from rateslib.fx import FXForwards, FXRates
 
 # Licence: Creative Commons - Attribution-NonCommercial-NoDerivatives 4.0 International
@@ -44,12 +64,13 @@ if TYPE_CHECKING:
         DualTypes,
         FXDeltaVolSmile,
         FXDeltaVolSurface,
+        FXForwards_,
         FXSabrSmile,
         FXSabrSurface,
-        FXVolObj,
         Sequence,
         SupportsRate,
         Variable,
+        _FXVolObj,
         str_,
     )
 
@@ -92,7 +113,7 @@ class Gradients:
     pre_variables: tuple[str, ...]  # string tags for AD coordination
     pre_rate_scalars: list[float]  # scalars for the rate attribute of instruments
     _ad: int  # ad order
-    instruments: tuple[tuple[SupportsRate, tuple[Any, ...], dict[str, Any]], ...]  # calibrators
+    instruments: tuple[tuple[SupportsRate, dict[str, Any]], ...]  # calibrators
 
     @property
     def J(self) -> NDArray[Nf64]:
@@ -135,7 +156,7 @@ class Gradients:
                     f"Cannot perform second derivative calculations when ad mode is {self._ad}.",
                 )
 
-            rates = np.array([_[0].rate(*_[1], **_[2]) for _ in self.instruments])
+            rates = np.array([_[0].rate(**_[1]) for _ in self.instruments])
             # solver is passed in order to extract curves as string
             _ = np.array([gradient(rate, self.variables, order=2) for rate in rates])
             self._J2 = np.transpose(_, (1, 2, 0))
@@ -252,11 +273,11 @@ class Gradients:
             J2, grad_s_vT = self.J2, self.grad_s_vT
 
         # dv/dr_l * d2r_l / dvdv
-        _: NDArray[Nf64] = np.tensordot(J2, grad_s_vT, (2, 0))  # type: ignore[assignment]
+        _: NDArray[Nf64] = np.tensordot(J2, grad_s_vT, (2, 0))
         # dv_z /ds * d2v / dv_zdv
-        _ = np.tensordot(grad_s_vT, _, (1, 0))  # type: ignore[assignment]
+        _ = np.tensordot(grad_s_vT, _, (1, 0))
         # dv_h /ds * d2v /dvdv_h
-        _ = -np.tensordot(grad_s_vT, _, (1, 1))  # type: ignore[assignment]
+        _ = -np.tensordot(grad_s_vT, _, (1, 1))
         grad_s_s_vT = _
         return grad_s_s_vT
         # _ = np.matmul(grad_s_vT, np.matmul(J2, grad_s_vT))
@@ -314,7 +335,7 @@ class Gradients:
                 ] = pre_slvr.J2_pre
                 i, j = i + pre_slvr.pre_n, j + pre_slvr.pre_m
 
-            rates = np.array([_[0].rate(*_[1], **_[2]) for _ in self.instruments])
+            rates = np.array([_[0].rate(**_[1]) for _ in self.instruments])
             # solver is passed in order to extract curves as string
             _ = np.array([gradient(r, self.pre_variables, order=2) for r in rates])
             J2[:, :, -self.m :] = np.transpose(_, (1, 2, 0))
@@ -425,7 +446,7 @@ class Gradients:
         # FX sensitivity requires reverting through all pre-solvers rates.
         _ = -np.tensordot(self.grad_f_f_rT_pre(fx_vars), self.grad_s_vT_pre, (2, 0))
         _ -= np.tensordot(self.grad_f_rT_pre(fx_vars), self.grad_f_s_vT_pre(fx_vars), (1, 1))
-        grad_f_f_vT: NDArray[Nf64] = _  # type: ignore[assignment]
+        grad_f_f_vT: NDArray[Nf64] = _
         return grad_f_f_vT
 
     def grad_f_vT_pre(self, fx_vars: Sequence[str]) -> NDArray[Nf64]:
@@ -519,7 +540,7 @@ class Gradients:
         """
         grad_s_f: NDArray[Nf64] = np.tensordot(
             self.grad_s_vT_pre, gradient(f, self.pre_variables), (1, 0)
-        )  # type: ignore[assignment]
+        )
         return grad_s_f
 
     def grad_s_sT_f_pre(self, f: Dual | Dual2 | Variable) -> NDArray[Nf64]:
@@ -539,8 +560,8 @@ class Gradients:
         grad_s_vT = self.grad_s_vT_pre
         grad_v_vT_f = gradient(f, self.pre_variables, order=2)
 
-        _: NDArray[Nf64] = np.tensordot(grad_s_vT, grad_v_vT_f, (1, 0))  # type: ignore[assignment]
-        _ = np.tensordot(_, grad_s_vT, (1, 1))  # type: ignore[assignment]
+        _: NDArray[Nf64] = np.tensordot(grad_s_vT, grad_v_vT_f, (1, 0))
+        _ = np.tensordot(_, grad_s_vT, (1, 1))
 
         grad_s_sT_f = _
         return grad_s_sT_f
@@ -934,6 +955,16 @@ class Gradients:
         return grad_s_sT_Pbas
 
 
+NO_PARAMETER_CURVES = [
+    ProxyCurve,
+    CompositeCurve,
+    MultiCsaCurve,
+    RolledCurve,
+    ShiftedCurve,
+    TranslatedCurve,
+]
+
+
 class Solver(Gradients, _WithState):
     """
     A numerical solver to determine node values on multiple pricing objects simultaneously.
@@ -1012,16 +1043,15 @@ class Solver(Gradients, _WithState):
     representative of a consistent *FXForwards* object for all *Instruments*.
 
     If the pricing objects and/or *metric* are not preset then the *Solver* ``instruments`` can be
-    given as a tuple where the second and third items are a tuple and dict representing positional
-    and keyword arguments passed directly to the :meth:`~rateslib.instruments.Metrics.rate`
-    method. Usually using the keyword arguments, and using an empty positional arguments tuple,
-    is more explicit. An example is:
+    given as a tuple where the second item is a dict representing keyword arguments passed
+    directly to the :meth:`~rateslib.instruments.Metrics.rate`
+    method. An example is:
 
     .. code-block:: python
 
        instruments=[
            ...
-           (FixedRateBond([args]), (), {"curves": bond_curve, "metric": "ytm"}),
+           (FixedRateBond([args]), {"curves": bond_curve, "metric": "ytm"}),
            ...
        ]
 
@@ -1040,7 +1070,7 @@ class Solver(Gradients, _WithState):
         s: Sequence[DualTypes] = (),
         weights: Sequence[float] | NoInput = NoInput(0),
         algorithm: str_ = NoInput(0),
-        fx: FXForwards | FXRates | NoInput = NoInput(0),
+        fx: FXForwards_ = NoInput(0),
         instrument_labels: Sequence[str] | NoInput = NoInput(0),
         id: str_ = NoInput(0),  # noqa: A002
         pre_solvers: Sequence[Solver] = (),
@@ -1100,8 +1130,7 @@ class Solver(Gradients, _WithState):
         self.curves = {
             curve.id: curve
             for curve in list(curves) + list(surfaces)
-            if type(curve) not in [ProxyCurve, CompositeCurve, MultiCsaCurve]
-            # Proxy and Composite curves have no parameters of their own
+            if type(curve) not in NO_PARAMETER_CURVES
         }
         self.variables = ()
         for curve in self.curves.values():
@@ -1110,13 +1139,13 @@ class Solver(Gradients, _WithState):
         self.n = len(self.variables)
 
         # aggregate and organise variables and labels including pre_solvers
-        self.pre_curves: dict[str, Curve | FXVolObj] = {}
+        self.pre_curves: dict[str, Curve | _FXVolObj] = {}
         self.pre_variables: tuple[str, ...] = ()
         self.pre_instrument_labels: tuple[tuple[str, str], ...] = ()
-        self.pre_instruments: tuple[tuple[SupportsRate, tuple[Any, ...], dict[str, Any]], ...] = ()
+        self.pre_instruments: tuple[tuple[SupportsRate, dict[str, Any]], ...] = ()
         self.pre_rate_scalars = []
         self.pre_m, self.pre_n = self.m, self.n
-        curve_collection: list[Curve | FXVolObj] = []
+        curve_collection: list[Curve | _FXVolObj] = []
         for pre_solver in self.pre_solvers:
             self.pre_variables += pre_solver.pre_variables
             self.pre_instrument_labels += pre_solver.pre_instrument_labels
@@ -1131,8 +1160,8 @@ class Solver(Gradients, _WithState):
             {
                 curve.id: curve
                 for curve in curves
-                if type(curve) in [ProxyCurve, CompositeCurve, MultiCsaCurve]
-                # Proxy and Composite curves added to the collection without variables
+                if type(curve) in NO_PARAMETER_CURVES
+                # no parameter curves added to the collection without variables
             },
         )
         curve_collection.extend(curves)
@@ -1148,14 +1177,12 @@ class Solver(Gradients, _WithState):
 
         # Final elements
         self._ad = 1
-        self.fx: FXRates | FXForwards | NoInput = fx
+        self.fx: FXForwards_ = fx
         if isinstance(self.fx, FXRates | FXForwards):
             self.fx._set_ad_order(1)
         elif not isinstance(self.fx, NoInput):
-            raise ValueError(
-                "`fx` argument to Solver must be either FXRates, FXForwards or NoInput(0)."
-            )
-        self.instruments: tuple[tuple[SupportsRate, tuple[Any, ...], dict[str, Any]], ...] = tuple(
+            raise ValueError("`fx` argument to Solver must be either FXForwards or NoInput(0).")
+        self.instruments: tuple[tuple[SupportsRate, dict[str, Any]], ...] = tuple(
             self._parse_instrument(inst) for inst in instruments
         )
         self.pre_instruments += self.instruments
@@ -1175,6 +1202,8 @@ class Solver(Gradients, _WithState):
 
     def __repr__(self) -> str:
         return f"<rl.Solver:{self.id} at {hex(id(self))}>"
+
+    # State management and mutation
 
     def _set_new_state(self) -> None:
         self._states = self._associated_states()
@@ -1240,8 +1269,8 @@ class Solver(Gradients, _WithState):
         return _
 
     def _parse_instrument(
-        self, value: SupportsRate | tuple[SupportsRate, tuple[Any, ...], dict[str, Any]]
-    ) -> tuple[SupportsRate, tuple[Any, ...], dict[str, Any]]:
+        self, value: SupportsRate | tuple[SupportsRate, dict[str, Any]]
+    ) -> tuple[SupportsRate, dict[str, Any]]:
         """
         Parses different input formats for an instrument given to the ``Solver``.
 
@@ -1273,28 +1302,23 @@ class Solver(Gradients, _WithState):
         """
         if not isinstance(value, tuple):
             # is a direct Instrument so convert to tuple with pricing params
-            _: tuple[SupportsRate, tuple[Any, ...], dict[str, Any]] = (
+            _: tuple[SupportsRate, dict[str, Any]] = (
                 value,
-                tuple(),
                 {"solver": self, "fx": self.fx},
             )
             return _
         else:
             # object is tuple
-            if len(value) != 3:
+            if len(value) != 2:
                 raise ValueError(
-                    "`Instrument` supplied to `Solver` as tuple must be a 3-tuple of "
-                    "signature: (Instrument, positional args[tuple], keyword "
-                    "args[dict]).",
+                    "`Instrument` supplied to `Solver` as tuple must be a 2-tuple of "
+                    "signature: (Instrument, keyword args[dict]).",
                 )
             ret0 = value[0]
-            ret1: tuple[Any, ...] = tuple()
-            ret2: dict[str, Any] = {"solver": self, "fx": self.fx}
-            if not (value[1] is None or value[1] == ()):
-                ret1 = value[1]
-            if not (value[2] is None or value[2] == {}):
-                ret2 = {**ret2, **value[2]}
-            return ret0, ret1, ret2
+            ret1: dict[str, Any] = {"solver": self, "fx": self.fx}
+            if not (value[1] is None or value[1] == {}):
+                ret1 = {**ret1, **value[1]}
+            return ret0, ret1
 
     def _reset_properties_(self, dual2_only: bool = False) -> None:
         """
@@ -1345,6 +1369,8 @@ class Solver(Gradients, _WithState):
         # self._grad_v_v_f = None
         # self._Jkm = None  # keep manifold originally used for exploring J2 calc method
 
+    # Pricing object ID mapping
+
     @_validate_states
     def _get_pre_curve(self, obj: str) -> Curve:
         ret: Curve | FXVols = self.pre_curves[obj]
@@ -1352,7 +1378,7 @@ class Solver(Gradients, _WithState):
             return ret
         else:
             raise ValueError(
-                f"A type of `Curve` object was sought with id:'{obj}' from Solver but another "
+                f"A _BaseCurve object was sought with id:'{obj}' from Solver but another "
                 f"type object was returned:'{type(ret)}'."
             )
 
@@ -1368,8 +1394,10 @@ class Solver(Gradients, _WithState):
             )
 
     @_validate_states
-    def _get_fx(self) -> FXRates | FXForwards | NoInput:
+    def _get_fx(self) -> FXForwards_:
         return self.fx
+
+    # Attributes
 
     @property
     def result(self) -> dict[str, Any]:
@@ -1404,7 +1432,7 @@ class Solver(Gradients, _WithState):
         Depends on ``self.pre_curves`` and ``self.instruments``.
         """
         if self._r is None:
-            self._r = np.array([_[0].rate(*_[1], **_[2]) for _ in self.instruments])
+            self._r = np.array([_[0].rate(**_[1]) for _ in self.instruments])
             # solver and fx are passed by default via parse_args to get string curves
         return self._r
 
@@ -1699,7 +1727,7 @@ class Solver(Gradients, _WithState):
         association exists and a direct ``fx`` object is supplied a warning may be
         emitted if they are not the same object.
         """
-        self._do_not_validate = True  # state is validated prior to the call
+        # self._do_not_validate = True  # state is validated prior to the call
         base, fx = self._get_base_and_fx(base, fx)
         if isinstance(fx, FXRates | FXForwards):
             fx_vars: tuple[str, ...] = fx.variables
@@ -1741,18 +1769,18 @@ class Solver(Gradients, _WithState):
             names=["type", "solver", "label"],
         )
         indexes = {"instruments": inst_idx, "fx": fx_idx}
-        r_idx = inst_idx.append(fx_idx)  # type: ignore[no-untyped-call]
+        r_idx = inst_idx.append(fx_idx)
         c_idx = MultiIndex.from_tuples([], names=["local_ccy", "display_ccy"])
         df = DataFrame(None, index=r_idx, columns=c_idx)
         for key, array in container.items():
             df.loc[indexes[key[0]], (key[1], key[2])] = array
 
         if not isinstance(base, NoInput):
-            df.loc[r_idx, ("all", base)] = df.loc[r_idx, (slice(None), base)].sum(axis=1)  # type: ignore[index]
+            df.loc[r_idx, ("all", base)] = df.loc[r_idx, (slice(None), base)].sum(axis=1)
 
         sorted_cols = df.columns.sort_values()
         ret: DataFrame = df.loc[:, sorted_cols].astype("float64")
-        self._do_not_validate = False
+        # self._do_not_validate = False
         return ret
 
     def _get_base_and_fx(self, base: str_, fx: FX_) -> tuple[str_, FX_]:
@@ -1770,8 +1798,11 @@ class Solver(Gradients, _WithState):
             # then a valid fx object that can convert is required.
             if not isinstance(fx, FXRates | FXForwards) and isinstance(self.fx, NoInput):
                 raise ValueError(
-                    "`base` is given but `fx` is not given as either FXRates or FXForwards, "
-                    "and Solver does not contain its own `fx` attributed which can be substituted."
+                    f"`base` is given as '{base}', but `fx` is not available.\n"
+                    "Either provide an FXForwards object directly as `fx` or ensure that Solver.fx "
+                    "is a valid object.\n"
+                    "Alternatively, omit the `base` argument altogether and get results displayed "
+                    "in local currency without base currency conversion."
                 )
 
         if isinstance(fx, NoInput):
@@ -1850,6 +1881,11 @@ class Solver(Gradients, _WithState):
         *Pricing and Trading Interest Rate Derivatives (2022)*, derived from
         first principles.
         The results are stated in the cross-gamma grid in figure 22.1.
+
+        .. ipython:: python
+           :suppress:
+
+           from rateslib import Solver, Curve
 
         .. ipython:: python
 
@@ -1992,7 +2028,7 @@ class Solver(Gradients, _WithState):
             names=["local_ccy", "display_ccy", "type", "solver", "label"],
         )
         if base is not NoInput.blank:
-            ridx = ridx.append(  # type: ignore[no-untyped-call]
+            ridx = ridx.append(
                 MultiIndex.from_tuples(
                     [("all", base) + _ for _ in inst_keys + fx_keys],
                     names=["local_ccy", "display_ccy", "type", "solver", "label"],
@@ -2095,7 +2131,7 @@ class Solver(Gradients, _WithState):
         r_0 = self.r_pre
         r_1 = np.array(
             [
-                _[0].rate(*_[1], **{**_[2], "solver": solver, "fx": solver.fx})
+                _[0].rate(**{**_[1], "solver": solver, "fx": solver.fx})
                 for _ in self.pre_instruments
             ],
         )
@@ -2190,7 +2226,7 @@ class Solver(Gradients, _WithState):
         # Get the instrument rates for self solver evaluated using the curves and links of other
         r = np.array(
             [
-                _[0].rate(*_[1], **{**_[2], "solver": solver, "fx": solver.fx})
+                _[0].rate(**{**_[1], "solver": solver, "fx": solver.fx})
                 for _ in self.pre_instruments
             ],
         )
@@ -2284,7 +2320,7 @@ class Solver(Gradients, _WithState):
             df.loc[indexes[key[0]], (key[1], key[2])] = array
 
         if not isinstance(base, NoInput):
-            df.loc[r_idx, ("all", base)] = df.loc[r_idx, (slice(None), base)].sum(axis=1)  # type: ignore[index]
+            df.loc[r_idx, ("all", base)] = df.loc[r_idx, (slice(None), base)].sum(axis=1)
 
         sorted_cols = df.columns.sort_values()
         _: DataFrame = df.loc[:, sorted_cols].astype("float64")

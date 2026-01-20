@@ -1,18 +1,20 @@
+# SPDX-License-Identifier: LicenseRef-Rateslib-Dual
+#
+# Copyright (c) 2026 Siffrorna Technology Limited
+#
+# Dual-licensed: Free Educational Licence or Paid Commercial Licence (commercial/professional use)
+# Source-available, not open source.
+#
+# See LICENSE and https://rateslib.com/py/en/latest/i_licence.html for details,
+# and/or contact info (at) rateslib (dot) com
+####################################################################################################
+
 import pytest
-from pandas import Series
-from rateslib import __version__, default_context, defaults, dt
-from rateslib.curves import Curve
-from rateslib.instruments import IRS
+from rateslib import NamedCal, __version__, default_context, defaults, dt, fixings
 
 
 def test_version() -> None:
-    assert __version__ == "2.1.1"
-
-
-@pytest.mark.parametrize("name", ["estr", "sonia", "sofr", "swestr", "nowa"])
-def test_fixings(name) -> None:
-    result = defaults.fixings[name]
-    assert isinstance(result, Series)
+    assert __version__ == "2.5.1"
 
 
 def test_context_raises() -> None:
@@ -34,20 +36,47 @@ def test_reset_defaults() -> None:
     assert "TEST" not in defaults.calendars
 
 
-def test_calendar_matches_fixings_corra() -> None:
-    # this should run without warnings or errors if the "tro" calendar matches the fixings.
-    swap = IRS(
-        effective=dt(2017, 1, 1),
-        termination=dt(2023, 7, 1),
-        frequency="A",
-        leg2_fixings=defaults.fixings["corra"],
-        calendar="tro",
-        fixed_rate=1.0,
+def test_defaults_singleton() -> None:
+    from rateslib.default import Defaults
+
+    other = Defaults()
+    assert id(other) == id(defaults)
+
+
+def test_fixings_singleton() -> None:
+    from rateslib.data.loader import Fixings
+
+    other = Fixings()
+    assert id(other) == id(fixings)
+
+
+def test_fx_index_change() -> None:
+    # test that default fx indexes can be overwritten and are loaded by constructed objects
+    from rateslib.data.fixings import FXFixing, FXIndex
+    from rateslib.scheduling import Adjuster
+
+    eurusd = FXFixing("eurusd", dt(2000, 1, 1))
+    assert eurusd.fx_index.calendar == NamedCal("tgt|fed")
+    assert eurusd.fx_index.settle == Adjuster.BusDaysLagSettle(2)
+    defaults.fx_index["eurusd"] = {"pair": "eurusd", "calendar": "stk", "settle": 3}
+    eurusd = FXFixing("eurusd", dt(2000, 1, 1))
+    assert eurusd.fx_index.calendar == NamedCal("stk")
+    assert eurusd.fx_index.settle == Adjuster.BusDaysLagSettle(3)
+
+    defaults.reset_defaults()
+    assert defaults.fx_index["eurusd"]["calendar"] == NamedCal("tgt|fed")
+
+
+def test_float_series_change():
+    from rateslib import IRS
+
+    with pytest.raises(ValueError, match="The FloatRateSeries: 'monkey' was not found "):
+        IRS(dt(2000, 1, 1), "1y", "A", leg2_fixing_series="monkey")
+
+    defaults.float_series["monkey"] = dict(
+        lag=0, calendar="nyc", modifier="f", eom=False, convention="act360"
     )
-    curve = Curve({dt(2017, 1, 1): 1.0, dt(2027, 1, 1): 1.0}, calendar="tro")
-    swap.npv(curves=curve)
+    IRS(dt(2000, 1, 1), "1y", "A", leg2_fixing_series="monkey")
 
-
-def test_fixings_raises_file_error() -> None:
-    with pytest.raises(ValueError, match="Fixing data for the index "):
-        defaults.fixings["nofile"]
+    defaults.reset_defaults()
+    assert "monkey" not in defaults.float_series

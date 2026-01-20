@@ -1,3 +1,14 @@
+# SPDX-License-Identifier: LicenseRef-Rateslib-Dual
+#
+# Copyright (c) 2026 Siffrorna Technology Limited
+#
+# Dual-licensed: Free Educational Licence or Paid Commercial Licence (commercial/professional use)
+# Source-available, not open source.
+#
+# See LICENSE and https://rateslib.com/py/en/latest/i_licence.html for details,
+# and/or contact info (at) rateslib (dot) com
+####################################################################################################
+
 from __future__ import annotations
 
 from json import dumps, loads
@@ -8,8 +19,8 @@ from typing import TYPE_CHECKING, Any
 from rateslib.curves import Curve, LineCurve
 from rateslib.curves.rs import CurveRs
 from rateslib.curves.utils import _CurveInterpolator, _CurveMeta, _CurveNodes, _CurveSpline
-from rateslib.default import NoInput
 from rateslib.dual import Variable
+from rateslib.enums.generics import NoInput
 from rateslib.fx import FXRates
 from rateslib.rs import from_json as from_json_rs
 from rateslib.scheduling import Schedule

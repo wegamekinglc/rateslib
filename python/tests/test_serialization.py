@@ -1,3 +1,14 @@
+# SPDX-License-Identifier: LicenseRef-Rateslib-Dual
+#
+# Copyright (c) 2026 Siffrorna Technology Limited
+#
+# Dual-licensed: Free Educational Licence or Paid Commercial Licence (commercial/professional use)
+# Source-available, not open source.
+#
+# See LICENSE and https://rateslib.com/py/en/latest/i_licence.html for details,
+# and/or contact info (at) rateslib (dot) com
+####################################################################################################
+
 from datetime import datetime as dt
 
 import pytest
@@ -11,7 +22,7 @@ from rateslib.curves.utils import (
 )
 from rateslib.default import NoInput
 from rateslib.dual import Dual, Dual2, Variable
-from rateslib.scheduling import get_calendar
+from rateslib.scheduling import Convention, get_calendar
 from rateslib.serialization import from_json
 from rateslib.serialization.utils import _enum_to_json
 
@@ -30,7 +41,7 @@ from rateslib.serialization.utils import _enum_to_json
 def test_curvemeta_json_round_trip(calendar, index_base, collateral):
     obj = _CurveMeta(
         _calendar=calendar,
-        _convention="act365f",
+        _convention=Convention.Act360,
         _modifier="MF",
         _index_base=index_base,
         _index_lag=1,
@@ -132,25 +143,19 @@ def index_curve():
 class TestCurve:
     def test_serialization(self, curve) -> None:
         expected = (
-            '{"PyNative": '
-            '{"Curve": '
-            '{"meta": "{\\"PyNative\\": '
-            '{\\"_CurveMeta\\": '
-            '{\\"calendar\\": '
-            '\\"{\\\\\\"NamedCal\\\\\\":{\\\\\\"name\\\\\\":\\\\\\"all\\\\\\"}}\\", '
-            '\\"convention\\": \\"act360\\", \\"modifier\\": \\"MF\\", '
-            '\\"index_base\\": '
-            '\\"{\\\\\\"PyNative\\\\\\":{\\\\\\"NoInput\\\\\\":0}}\\", '
-            '\\"index_lag\\": 3, '
-            '\\"collateral\\": null, \\"credit_discretization\\": 23, '
-            '\\"credit_recovery_rate\\": \\"0.4\\"}}}", '
-            '"interpolator": '
-            '"{\\"PyNative\\": {\\"_CurveInterpolator\\": '
-            '{\\"local\\": \\"linear\\", \\"spline\\": \\"null\\", '
-            '\\"convention\\": \\"act360\\"}}}", '
-            '"id": "v", "ad": 1, '
-            '"nodes": "{\\"PyNative\\": {\\"_CurveNodes\\": '
-            '{\\"_nodes\\": {\\"2022-03-01\\": 1.0, \\"2022-03-31\\": 0.99}}}}"}}}'
+            r'{"PyNative": '
+            r'{"Curve": {"meta": "{\"PyNative\": '
+            r"{\"_CurveMeta\": {\"calendar\": "
+            r"\"{\\\"NamedCal\\\":{\\\"name\\\":\\\"all\\\"}}\", "
+            r"\"convention\": \"{\\\"Convention\\\":\\\"Act360\\\"}\", "
+            r"\"modifier\": \"MF\", \"index_base\": \"{\\\"PyNative\\\":"
+            r"{\\\"NoInput\\\":0}}\", \"index_lag\": 3, \"collateral\": "
+            r"null, \"credit_discretization\": 23, \"credit_recovery_rate\": "
+            r'\"0.4\"}}}", "interpolator": "{\"PyNative\": {\"_CurveInterpolator\": '
+            r"{\"local\": \"linear\", \"spline\": \"null\", \"convention\": "
+            r'\"{\\\"Convention\\\":\\\"Act360\\\"}\"}}}", "id": "v", '
+            r'"ad": 1, "nodes": "{\"PyNative\": {\"_CurveNodes\": {\"_nodes\": '
+            r'{\"2022-03-01\": 1.0, \"2022-03-31\": 0.99}}}}"}}}'
         )
         result = curve.to_json()
         assert result == expected

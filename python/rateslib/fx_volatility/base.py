@@ -1,9 +1,22 @@
+# SPDX-License-Identifier: LicenseRef-Rateslib-Dual
+#
+# Copyright (c) 2026 Siffrorna Technology Limited
+#
+# Dual-licensed: Free Educational Licence or Paid Commercial Licence (commercial/professional use)
+# Source-available, not open source.
+#
+# See LICENSE and https://rateslib.com/py/en/latest/i_licence.html for details,
+# and/or contact info (at) rateslib (dot) com
+####################################################################################################
+
+
 from __future__ import annotations  # type hinting
 
 from typing import TYPE_CHECKING, NoReturn, TypeAlias
 
-from rateslib.default import NoInput, PlotOutput, _drb, plot
+from rateslib.default import PlotOutput, plot
 from rateslib.dual import Dual, Dual2, Variable
+from rateslib.enums.generics import NoInput, _drb
 from rateslib.fx_volatility.utils import _FXSmileMeta
 from rateslib.mutability import _WithCache, _WithState
 

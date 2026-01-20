@@ -1,9 +1,20 @@
+# SPDX-License-Identifier: LicenseRef-Rateslib-Dual
+#
+# Copyright (c) 2026 Siffrorna Technology Limited
+#
+# Dual-licensed: Free Educational Licence or Paid Commercial Licence (commercial/professional use)
+# Source-available, not open source.
+#
+# See LICENSE and https://rateslib.com/py/en/latest/i_licence.html for details,
+# and/or contact info (at) rateslib (dot) com
+####################################################################################################
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 from rateslib import defaults
-from rateslib.default import NoInput
+from rateslib.enums.generics import NoInput
 from rateslib.rs import Cal, NamedCal, UnionCal
 from rateslib.scheduling.adjuster import _convert_to_adjuster
 
@@ -91,6 +102,7 @@ def get_calendar(
     """
     if isinstance(calendar, str):
         # parse the string in Python and return Rust Cal/UnionCal objects directly
+        calendar = calendar.replace(" ", "")
         if calendar in defaults.calendars:
             return defaults.calendars[calendar]
         return _parse_str_calendar(calendar, named)

@@ -1,3 +1,14 @@
+# SPDX-License-Identifier: LicenseRef-Rateslib-Dual
+#
+# Copyright (c) 2026 Siffrorna Technology Limited
+#
+# Dual-licensed: Free Educational Licence or Paid Commercial Licence (commercial/professional use)
+# Source-available, not open source.
+#
+# See LICENSE and https://rateslib.com/py/en/latest/i_licence.html for details,
+# and/or contact info (at) rateslib (dot) com
+####################################################################################################
+
 from collections.abc import Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -82,9 +93,13 @@ class Schedule:
     calendar: CalTypes
     accrual_adjuster: Adjuster
     payment_adjuster: Adjuster
+    payment_adjuster2: Adjuster
+    payment_adjuster3: Adjuster
     uschedule: list[datetime]
     aschedule: list[datetime]
     pschedule: list[datetime]
+    pschedule2: list[datetime]
+    pschedule3: list[datetime]
 
     def __init__(
         self,
@@ -94,6 +109,8 @@ class Schedule:
         calendar: CalTypes,
         accrual_adjuster: Adjuster,
         payment_adjuster: Adjuster,
+        payment_adjuster2: Adjuster,
+        payment_adjuster3: Adjuster | None,
         front_stub: datetime | None,
         back_stub: datetime | None,
         eom: bool,
@@ -104,16 +121,33 @@ class Schedule:
 
 class Convention:
     Act365F: Convention
-    Act365FPlus: Convention
     Act360: Convention
+    Act364: Convention
+    Act365_25: Convention
     Thirty360: Convention
+    ThirtyU360: Convention
     ThirtyE360: Convention
-    Thirty360ISDA: Convention
+    ThirtyE360ISDA: Convention
+    YearsAct365F: Convention
+    YearsAct360: Convention
+    YearsMonths: Convention
+    One: Convention
     ActActISDA: Convention
     ActActICMA: Convention
-    One: Convention
-    OnePlus: Convention
     Bus252: Convention
+    ActActICMAStubAct365F: Convention
+
+    def dcf(
+        self,
+        start: datetime,
+        end: datetime,
+        termination: datetime | None,
+        frequency: Frequency | None,
+        stub: bool | None,
+        calendar: CalTypes | None,
+        adjuster: Adjuster | None,
+    ) -> float: ...
+    def to_json(self) -> str: ...
 
 class Modifier:
     P: Modifier
@@ -132,7 +166,8 @@ class RollDay:
     def to_json(self) -> str: ...
 
 class _Adjustment:
-    def adjust(self, udate: datetime, calendar: CalTypes) -> datetime: ...
+    def adjust(self, date: datetime, calendar: CalTypes) -> datetime: ...
+    def reverse(self, date: datetime, calendar: CalTypes) -> list[datetime]: ...
     def adjusts(self, udates: list[datetime], calendars: CalTypes) -> list[datetime]: ...
 
 class Adjuster(_Adjustment):
@@ -147,6 +182,11 @@ class Adjuster(_Adjustment):
     class ModifiedPreviousSettle(Adjuster): ...
     class FollowingExLast(Adjuster): ...
     class FollowingExLastSettle(Adjuster): ...
+
+    class BusDaysLagSettleInAdvance(Adjuster):
+        number: int
+
+        def __init__(self, number: int) -> None: ...
 
     class BusDaysLagSettle(Adjuster):
         number: int
