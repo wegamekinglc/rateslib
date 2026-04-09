@@ -22,7 +22,7 @@ from rateslib.curves import Curve
 from rateslib.dual.utils import _dual_float
 from rateslib.enums.generics import NoInput, _drb
 from rateslib.instruments.protocols import _BaseInstrument, _KWArgs
-from rateslib.instruments.protocols.pricing import _Curves, _maybe_get_curve_maybe_from_solver, _Vol
+from rateslib.instruments.protocols.pricing import _Curves, _get_curve, _parse_curves, _Vol
 from rateslib.periods.utils import (
     _maybe_local,
 )
@@ -32,7 +32,7 @@ from rateslib.scheduling.calendars import _get_years_and_months
 from rateslib.solver import Solver
 
 if TYPE_CHECKING:
-    from rateslib.typing import (
+    from rateslib.local_types import (
         Any,
         CurvesT_,
         DualTypes,
@@ -1217,6 +1217,9 @@ class BondFuture(_BaseInstrument):
         This method determines the *'futures_price'* and *'ytm'*  by assuming a net
         basis of zero and pricing from the cheapest to delivery (CTD).
         """
+        c = _parse_curves(self, curves, solver)
+        disc_curve = _get_curve("disc_curve", False, True, *c)
+
         basket: tuple[FixedRateBond, ...] = self.kwargs.meta["basket"]
         metric_ = _drb(self.kwargs.meta["metric"], metric).lower()
         if metric_ not in ["future_price", "ytm"]:
@@ -1225,14 +1228,7 @@ class BondFuture(_BaseInstrument):
         f_settlement = _drb(self.kwargs.meta["delivery"][1], settlement)
         prices_: list[DualTypes] = [
             bond.rate(
-                curves={  # type: ignore[arg-type]
-                    "disc_curve": _maybe_get_curve_maybe_from_solver(
-                        curves_meta=self.kwargs.meta["curves"],
-                        curves=self._parse_curves(curves),
-                        name="disc_curve",
-                        solver=solver,
-                    )
-                },
+                curves={"disc_curve": disc_curve},  # type: ignore[arg-type]
                 solver=solver,
                 fx=fx,
                 base=base,

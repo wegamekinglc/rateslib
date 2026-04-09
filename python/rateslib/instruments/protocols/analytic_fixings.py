@@ -18,19 +18,20 @@ from pandas import DataFrame, DatetimeIndex, concat
 
 from rateslib.enums.generics import NoInput
 from rateslib.instruments.protocols.pricing import (
+    _get_curve,
     _get_fx_maybe_from_solver,
-    _maybe_get_curve_or_dict_maybe_from_solver,
-    _maybe_get_fx_vol_maybe_from_solver,
+    _get_fx_vol,
+    _parse_curves,
+    _parse_vol,
     _WithPricingObjs,
 )
 
 if TYPE_CHECKING:
-    from rateslib.typing import (
+    from rateslib.local_types import (
         CurvesT_,
         FXForwards_,
         Solver_,
         VolT_,
-        _Curves,
         _KWArgs,
         _Vol,
         datetime_,
@@ -157,12 +158,12 @@ class _WithAnalyticRateFixings(_WithPricingObjs, Protocol):
         assert hasattr(self, "legs")  # noqa: S101
 
         # this is a generic implementation to handle 2 legs.
-        _curves: _Curves = self._parse_curves(curves)
-        _vol: _Vol = self._parse_vol(vol)
-        _curves_meta: _Curves = self.kwargs.meta["curves"]
+        c = _parse_curves(self, curves, solver)  # type: ignore[arg-type]
+        v = _parse_vol(self, vol, solver, False)  # type: ignore[call-overload, misc]
+        fx_vol = _get_fx_vol(True, True, *v)
+
         _vol_meta: _Vol = self.kwargs.meta["vol"]
         _fx_maybe_from_solver = _get_fx_maybe_from_solver(fx=fx, solver=solver)
-        fx_vol = _maybe_get_fx_vol_maybe_from_solver(_vol_meta, _vol, solver)
 
         dfs: list[DataFrame] = []
         for leg, names in zip(
@@ -173,17 +174,14 @@ class _WithAnalyticRateFixings(_WithPricingObjs, Protocol):
             ],
             strict=False,
         ):
+            rate_curve = _get_curve(names[0], True, True, *c)
+            disc_curve = _get_curve(names[1], False, True, *c)
+            index_curve = _get_curve(names[2], False, True, *c)
             dfs.append(
                 leg.local_analytic_rate_fixings(
-                    rate_curve=_maybe_get_curve_or_dict_maybe_from_solver(
-                        _curves_meta, _curves, names[0], solver
-                    ),
-                    disc_curve=_maybe_get_curve_or_dict_maybe_from_solver(
-                        _curves_meta, _curves, names[1], solver
-                    ),
-                    index_curve=_maybe_get_curve_or_dict_maybe_from_solver(
-                        _curves_meta, _curves, names[2], solver
-                    ),
+                    rate_curve=rate_curve,
+                    disc_curve=disc_curve,
+                    index_curve=index_curve,
                     fx=_fx_maybe_from_solver,
                     fx_vol=fx_vol,
                     settlement=settlement,

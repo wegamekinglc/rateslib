@@ -16,8 +16,13 @@ from rateslib.enums.parameters import (
     FXDeltaMethod,
     FXOptionMetric,
     IndexMethod,
+    IROptionMetric,
+    LegIndexBase,
     LegMtm,
+    OptionPricingModel,
+    OptionType,
     SpreadCompoundMethod,
+    SwaptionSettlementMethod,
 )
 
 __all__ = [
@@ -25,8 +30,13 @@ __all__ = [
     "SpreadCompoundMethod",
     "IndexMethod",
     "FXDeltaMethod",
+    "SwaptionSettlementMethod",
     "FXOptionMetric",
+    "IROptionMetric",
+    "OptionPricingModel",
+    "OptionType",
     "LegMtm",
+    "LegIndexBase",
     "NoInput",
     "Result",
     "Ok",

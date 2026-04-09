@@ -15,22 +15,21 @@ from typing import TYPE_CHECKING, Protocol
 
 from rateslib.enums.generics import NoInput
 from rateslib.instruments.protocols.pricing import (
+    _get_curve,
     _get_fx_forwards_maybe_from_solver,
-    _maybe_get_curve_maybe_from_solver,
-    _maybe_get_curve_or_dict_maybe_from_solver,
-    _maybe_get_fx_vol_maybe_from_solver,
-    _Vol,
+    _get_fx_vol,
+    _parse_curves,
+    _parse_vol,
     _WithPricingObjs,
 )
 
 if TYPE_CHECKING:
-    from rateslib.typing import (
+    from rateslib.local_types import (
         CurvesT_,
         DualTypes,
         FXForwards_,
         Solver_,
         VolT_,
-        _Curves,
         _KWArgs,
         datetime_,
         str_,
@@ -106,25 +105,20 @@ class _WithAnalyticDelta(_WithPricingObjs, Protocol):
         -------
         float, Dual, Dual2, Variable or dict of such indexed by string currency.
         """
-        _curves: _Curves = self._parse_curves(curves)
-        _vol: _Vol = self._parse_vol(vol)
-        _curves_meta: _Curves = self.kwargs.meta["curves"]
-        _vol_meta: _Vol = self.kwargs.meta["vol"]
+        c = _parse_curves(self, curves, solver)  # type: ignore[arg-type]
+        v = _parse_vol(self, vol, solver, False)  # type: ignore[call-overload, misc]
 
         prefix = "" if leg == 1 else "leg2_"
 
         if hasattr(self, "legs"):
+            rate_curve = _get_curve(f"{prefix}rate_curve", True, True, *c)
+            disc_curve = _get_curve(f"{prefix}disc_curve", False, True, *c)
+            index_curve = _get_curve(f"{prefix}index_curve", False, True, *c)
             value: DualTypes | dict[str, DualTypes] = self.legs[leg - 1].analytic_delta(
-                rate_curve=_maybe_get_curve_or_dict_maybe_from_solver(
-                    _curves_meta, _curves, f"{prefix}rate_curve", solver
-                ),
-                disc_curve=_maybe_get_curve_maybe_from_solver(
-                    _curves_meta, _curves, f"{prefix}disc_curve", solver
-                ),
-                index_curve=_maybe_get_curve_maybe_from_solver(
-                    _curves_meta, _curves, f"{prefix}index_curve", solver
-                ),
-                fx_vol=_maybe_get_fx_vol_maybe_from_solver(_vol_meta, _vol, solver),
+                rate_curve=rate_curve,
+                disc_curve=disc_curve,
+                index_curve=index_curve,
+                fx_vol=_get_fx_vol(True, True, *v),
                 fx=_get_fx_forwards_maybe_from_solver(fx=fx, solver=solver),
                 base=base,
                 local=local,

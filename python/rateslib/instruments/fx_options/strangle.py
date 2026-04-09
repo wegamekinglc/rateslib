@@ -14,25 +14,26 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from rateslib import defaults
-from rateslib.curves._parsers import _validate_obj_not_no_input
 from rateslib.dual import dual_log, newton_1dim
 from rateslib.dual.utils import _set_ad_order_objects
 from rateslib.enums.generics import NoInput, _drb
 from rateslib.enums.parameters import FXDeltaMethod
-from rateslib.fx_volatility import FXDeltaVolSmile, FXDeltaVolSurface, FXSabrSmile, FXSabrSurface
 from rateslib.instruments.fx_options.call_put import FXCall, FXPut
 from rateslib.instruments.fx_options.risk_reversal import _BaseFXOptionStrat
 from rateslib.instruments.protocols.pricing import (
+    _get_curve,
     _get_fx_forwards_maybe_from_solver,
-    _maybe_get_curve_maybe_from_solver,
-    _maybe_get_fx_vol_maybe_from_solver,
+    _get_fx_vol,
+    _parse_curves,
+    _parse_vol,
     _Vol,
 )
 from rateslib.periods.utils import _validate_fx_as_forwards
 from rateslib.splines import evaluate
+from rateslib.volatility import FXDeltaVolSmile, FXDeltaVolSurface, FXSabrSmile, FXSabrSurface
 
 if TYPE_CHECKING:
-    from rateslib.typing import (  # pragma: no cover
+    from rateslib.local_types import (  # pragma: no cover
         Any,
         CalInput,
         CurvesT_,
@@ -40,8 +41,9 @@ if TYPE_CHECKING:
         DualTypes_,
         FXForwards,
         FXForwards_,
-        FXVolStrat_,
+        Solver,
         Solver_,
+        VolStrat_,
         VolT_,
         _BaseFXOptionPeriod,
         _FXVolOption,
@@ -323,7 +325,7 @@ class FXStrangle(_BaseFXOptionStrat):
         self.kwargs.leg1["expiry"] = self.instruments[0].kwargs.leg1["expiry"]
 
     @classmethod
-    def _parse_vol(cls, vol: FXVolStrat_) -> tuple[_Vol, _Vol]:  # type: ignore[override]
+    def _parse_vol(cls, vol: VolStrat_) -> tuple[_Vol, _Vol]:  # type: ignore[override]
         if not isinstance(vol, list | tuple):
             vol = (vol,) * 2
         return FXPut._parse_vol(vol[0]), FXCall._parse_vol(vol[1])
@@ -334,7 +336,7 @@ class FXStrangle(_BaseFXOptionStrat):
         curves: CurvesT_ = NoInput(0),
         solver: Solver_ = NoInput(0),
         fx: FXForwards_ = NoInput(0),
-        vol: FXVolStrat_ = NoInput(0),
+        vol: VolStrat_ = NoInput(0),
         base: str_ = NoInput(0),
         settlement: datetime_ = NoInput(0),
         forward: datetime_ = NoInput(0),
@@ -357,7 +359,7 @@ class FXStrangle(_BaseFXOptionStrat):
         solver: Solver_,
         fx: FXForwards_,
         base: str_,
-        vol: FXVolStrat_,
+        vol: VolStrat_,
         metric: str_,
         settlement: datetime_,
         forward: datetime_,
@@ -400,50 +402,24 @@ class FXStrangle(_BaseFXOptionStrat):
         solver: Solver_,
         fx: FXForwards_,
         base: str_,
-        vol: FXVolStrat_,
+        vol: VolStrat_,
         record_greeks: bool,
     ) -> DualTypes:
         """
         Solve the single vol rate metric for a strangle using iterative market convergence routine.
         """
-        # Get curves and vol
-        _curves = self._parse_curves(curves)
-        _vol = self._parse_vol(vol)
+        c = _parse_curves(self, curves, solver)
+        rate_curve = _get_curve("rate_curve", False, False, *c)
+        disc_curve = _get_curve("disc_curve", False, False, *c)
+
+        v: tuple[tuple[_Vol, _Vol], tuple[_Vol, _Vol], Solver] = _parse_vol(  # type: ignore[assignment]
+            self, vol, solver, True
+        )
+
         fxf = _validate_fx_as_forwards(_get_fx_forwards_maybe_from_solver(solver=solver, fx=fx))
-        rate_curve = _validate_obj_not_no_input(
-            _maybe_get_curve_maybe_from_solver(
-                curves_meta=self.kwargs.meta["curves"],
-                curves=_curves,
-                name="rate_curve",
-                solver=solver,
-            ),
-            "rate_curve",
-        )
-        disc_curve = _validate_obj_not_no_input(
-            _maybe_get_curve_maybe_from_solver(
-                curves_meta=self.kwargs.meta["curves"],
-                curves=_curves,
-                name="disc_curve",
-                solver=solver,
-            ),
-            "disc_curve",
-        )
-        vol_0: _FXVolOption = _validate_obj_not_no_input(  # type: ignore[assignment]
-            _maybe_get_fx_vol_maybe_from_solver(
-                vol_meta=self.kwargs.meta["vol"][0],
-                vol=_vol[0],
-                solver=solver,
-            ),
-            "`vol` at index [0]",
-        )
-        vol_1: _FXVolOption = _validate_obj_not_no_input(  # type: ignore[assignment]
-            _maybe_get_fx_vol_maybe_from_solver(
-                vol_meta=self.kwargs.meta["vol"][1],
-                vol=_vol[1],
-                solver=solver,
-            ),
-            "`vol` at index [1]",
-        )
+
+        vol_0 = _get_fx_vol(True, False, v[0][0], v[1][0], solver)
+        vol_1 = _get_fx_vol(True, False, v[0][1], v[1][1], solver)
 
         # Get initial data from objects in their native AD order
         spot: datetime = fxf.pairs_settlement[self.kwargs.leg1["pair"].pair]

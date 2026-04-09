@@ -25,7 +25,7 @@ from rateslib.enums.generics import Err, NoInput, Ok
 from rateslib.rs import ADOrder, Dual, Dual2, _dsolve1, _dsolve2, _fdsolve1, _fdsolve2
 
 if TYPE_CHECKING:
-    from rateslib.typing import (
+    from rateslib.local_types import (
         Any,
         Arr1dF64,
         Arr1dObj,
@@ -55,6 +55,22 @@ def _dual_float(val: DualTypes) -> float:
             #  See: https://github.com/PyO3/pyo3/issues/3672
             #  and https://github.com/PyO3/pyo3/discussions/3911
             return val.real
+        raise e
+
+
+def _dual_round(val: DualTypes, ndigits: int) -> DualTypes:
+    """Overload for the round() builtin to handle Duals: ONLY impacting the real quantity"""
+    try:
+        return round(val, ndigits)  # type: ignore[arg-type]
+    except TypeError as e:  # val is not Number but a Variable
+        if isinstance(val, Dual):
+            return Dual.vars_from(val, round(val.real, ndigits), val.vars, val.dual)
+        elif isinstance(val, Dual2):
+            return Dual2.vars_from(
+                val, round(val.real, ndigits), val.vars, val.dual, val.dual2.ravel()
+            )
+        elif isinstance(val, Variable):
+            return Variable(round(val.real, ndigits), vars=val.vars, dual=val.dual)
         raise e
 
 

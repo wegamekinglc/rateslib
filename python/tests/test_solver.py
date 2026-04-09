@@ -9,22 +9,21 @@
 # and/or contact info (at) rateslib (dot) com
 ####################################################################################################
 
+import sys
 import warnings
 from datetime import datetime as dt
-from math import exp
+from math import cos, exp
 
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose
-from pandas import DataFrame, MultiIndex
+from pandas import DataFrame, MultiIndex, Series
 from pandas.errors import PerformanceWarning
 from pandas.testing import assert_frame_equal, assert_series_equal
-from rateslib import default_context
-from rateslib.curves import CompositeCurve, Curve, LineCurve, MultiCsaCurve, index_left
-from rateslib.default import NoInput
-from rateslib.dual import Dual, Dual2, gradient, ift_1dim, newton_1dim, newton_ndim
+from rateslib import add_tenor, calendars, default_context
+from rateslib.curves import CompositeCurve, Curve, LineCurve, MultiCsaCurve
+from rateslib.dual import Dual, Dual2, Variable, gradient, ift_1dim, newton_1dim, newton_ndim
 from rateslib.fx import FXForwards, FXRates
-from rateslib.fx_volatility import FXDeltaVolSmile, FXDeltaVolSurface, FXSabrSmile, FXSabrSurface
 from rateslib.instruments import (
     IRS,
     XCS,
@@ -39,6 +38,7 @@ from rateslib.instruments import (
     Value,
 )
 from rateslib.solver import Gradients, Solver
+from rateslib.volatility import FXDeltaVolSmile, FXDeltaVolSurface, FXSabrSmile, FXSabrSurface
 
 
 class TestIFTSolver:
@@ -117,45 +117,225 @@ class TestIFTSolver:
 
         assert abs(d2g_ds2_ad - d2g_ds2_analytic) < 1e-10
 
-    def test_dekker(self):
-        def s(x):
-            return exp(x) + x**2
+    class TestDekker:
+        def test_simple_linear(self):
+            # test should converge in one secant iteration
+            def s(g):
+                return g
 
-        s_tgt = s(2.0)
-        result = ift_1dim(s, s_tgt, "modified_dekker", (1.15, 5.0), conv_tol=1e-12)
-        assert result["g"] == 2.0
-        assert result["iterations"] < 12
+            s_tgt = s(2.0)
+            result = ift_1dim(s, s_tgt, "modified_dekker", (0, 4), conv_tol=1e-12)
+            assert result["g"] == 2.0
+            assert result["iterations"] == 1
 
-        result2 = ift_1dim(s, s_tgt, "bisection", (1.15, 5.0), conv_tol=1e-12)
-        assert 30 < result2["iterations"] < 50
+        def test_cubic_with_bracketed_intervals(self):
+            # test converge to different roots withing the bracketed interval
+            def s(g):
+                return g**3 - 6 * g**2 + 11 * g - 6
 
-    def test_dekker_conv_tol(self):
-        def s(x):
-            return exp(x) + x**2
+            s_tgt = 0.0
+            # roots at 1, 2, 3
+            result = ift_1dim(s, s_tgt, "modified_dekker", (0, 1.5), conv_tol=1e-12, func_tol=1e-12)
+            assert abs(result["g"] - 1.0) < 1e-12
+            assert result["iterations"] < 10
 
-        s_tgt = s(2.0)
-        result = ift_1dim(s, s_tgt, "modified_dekker", (1.15, 5.0), conv_tol=1e-3)
-        assert result["state"] == 1
+            result = ift_1dim(
+                s, s_tgt, "modified_dekker", (1.1, 2.9), conv_tol=1e-12, func_tol=1e-12
+            )
+            assert abs(result["g"] - 2.0) < 1e-12
+            assert result["iterations"] < 10
 
-    def test_brent(self):
-        def s(x):
-            return exp(x) + x**2
+            result = ift_1dim(
+                s, s_tgt, "modified_dekker", (2.1, 25.0), conv_tol=1e-12, func_tol=1e-12
+            )
+            assert abs(result["g"] - 3.0) < 1e-12
+            assert result["iterations"] < 15
 
-        s_tgt = s(2.0)
-        result = ift_1dim(s, s_tgt, "modified_brent", (1.15, 5.0), conv_tol=1e-12)
-        assert result["g"] == 2.0
-        assert result["iterations"] < 12
+        @pytest.mark.parametrize("bracket", [(0.0, 1.0), (1.0, 10.0)])
+        def test_root_in_bracket(self, bracket):
+            # test converge to different roots withing the bracketed interval
+            def s(g):
+                return g**3 - 6 * g**2 + 11 * g - 6
 
-        # result2 = ift_1dim(s, s_tgt, "bisection", (1.15, 5.0), conv_tol=1e-12)
-        # assert result["time"] <= result2["time"]
+            s_tgt = 0.0
+            # roots at 1, 2, 3
+            result = ift_1dim(s, s_tgt, "modified_dekker", bracket, conv_tol=1e-12, func_tol=1e-12)
+            assert abs(result["g"] - 1.0) < 1e-12
+            assert result["iterations"] == 1
 
-    def test_brent_conv_tol(self):
-        def s(x):
-            return exp(x) + x**2
+        def test_both_roots_in_bracket_takes_left_side(self):
+            # test converge to different roots withing the bracketed interval
+            def s(g):
+                return g**3 - 6 * g**2 + 11 * g - 6
 
-        s_tgt = s(2.0)
-        result = ift_1dim(s, s_tgt, "modified_brent", (1.15, 5.0), conv_tol=1e-3)
-        assert result["state"] == 1
+            s_tgt = 0.0
+            # roots at 1, 2, 3
+            result = ift_1dim(
+                s, s_tgt, "modified_dekker", (1.0, 2.0), conv_tol=1e-12, func_tol=1e-12
+            )
+            assert abs(result["g"] - 1.0) < 1e-12
+            assert result["iterations"] == 1
+
+        def test_horizontal_secant(self):
+            # the first iterate the boundaries yield the same value and the secant is div by zero
+            def s(g):
+                return g**2 - 2
+
+            s_tgt = 0.0
+            # roots at 1, 2, 3
+            result = ift_1dim(
+                s, s_tgt, "modified_dekker", (-2.0, 2.0), conv_tol=1e-12, func_tol=1e-12
+            )
+            assert abs(result["g"] + 2**0.5) < 1e-12
+            assert result["iterations"] < 10
+
+        def test_asymptote(self):
+            def s(g):
+                return 1 / (g - 3) - 6
+
+            s_tgt = 0.0
+            # roots at 19 / 6
+            result = ift_1dim(
+                s, s_tgt, "modified_dekker", (3.02, 4.0), conv_tol=1e-12, func_tol=1e-12
+            )
+            assert abs(result["g"] - 19 / 6) < 1e-12
+            assert result["iterations"] < 12
+
+        def test_dekker(self):
+            def s(x):
+                return exp(x) + x**2
+
+            s_tgt = s(2.0)
+            result = ift_1dim(s, s_tgt, "modified_dekker", (1.15, 5.0), conv_tol=1e-12)
+            assert result["g"] == 2.0
+            assert result["iterations"] < 12
+
+            result2 = ift_1dim(s, s_tgt, "bisection", (1.15, 5.0), conv_tol=1e-12)
+            assert 30 < result2["iterations"] < 50
+
+        def test_dekker_conv_tol(self):
+            def s(x):
+                return exp(x) + x**2
+
+            s_tgt = s(2.0)
+            result = ift_1dim(s, s_tgt, "modified_dekker", (1.15, 5.0), conv_tol=1e-3)
+            assert result["state"] == 1
+
+    class TestBrent:
+        def test_simple_linear(self):
+            # test should converge in one secant iteration
+            def s(g):
+                return g
+
+            s_tgt = s(2.0)
+            result = ift_1dim(s, s_tgt, "modified_brent", (0, 4), conv_tol=1e-12)
+            assert result["g"] == 2.0
+            assert result["iterations"] == 1
+
+        def test_cubic_with_bracketed_intervals(self):
+            # test converge to different roots withing the bracketed interval
+            def s(g):
+                return g**3 - 6 * g**2 + 11 * g - 6
+
+            s_tgt = 0.0
+            # roots at 1, 2, 3
+            result = ift_1dim(s, s_tgt, "modified_brent", (0, 1.5), conv_tol=1e-12, func_tol=1e-12)
+            assert abs(result["g"] - 1.0) < 1e-12
+            assert result["iterations"] < 10
+
+            result = ift_1dim(
+                s, s_tgt, "modified_brent", (1.1, 2.9), conv_tol=1e-12, func_tol=1e-12
+            )
+            assert abs(result["g"] - 2.0) < 1e-12
+            assert result["iterations"] < 10
+
+            result = ift_1dim(
+                s, s_tgt, "modified_brent", (2.1, 25.0), conv_tol=1e-12, func_tol=1e-12
+            )
+            assert abs(result["g"] - 3.0) < 1e-12
+            assert result["iterations"] < 15
+
+        @pytest.mark.parametrize("bracket", [(0.0, 1.0), (1.0, 10.0)])
+        def test_root_in_bracket(self, bracket):
+            # test converge to different roots withing the bracketed interval
+            def s(g):
+                return g**3 - 6 * g**2 + 11 * g - 6
+
+            s_tgt = 0.0
+            # roots at 1, 2, 3
+            result = ift_1dim(s, s_tgt, "modified_brent", bracket, conv_tol=1e-12, func_tol=1e-12)
+            assert abs(result["g"] - 1.0) < 1e-12
+            assert result["iterations"] == 1
+
+        def test_both_roots_in_bracket_takes_left_side(self):
+            # test converge to different roots withing the bracketed interval
+            def s(g):
+                return g**3 - 6 * g**2 + 11 * g - 6
+
+            s_tgt = 0.0
+            # roots at 1, 2, 3
+            result = ift_1dim(
+                s, s_tgt, "modified_brent", (1.0, 2.0), conv_tol=1e-12, func_tol=1e-12
+            )
+            assert abs(result["g"] - 1.0) < 1e-12
+            assert result["iterations"] == 1
+
+        def test_horizontal_secant(self):
+            # the first iterate the boundaries yield the same value and the secant is div by zero
+            def s(g):
+                return g**2 - 2
+
+            s_tgt = 0.0
+            # roots at 1, 2, 3
+            result = ift_1dim(
+                s, s_tgt, "modified_brent", (-2.0, 2.0), conv_tol=1e-12, func_tol=1e-12
+            )
+            assert abs(result["g"] + 2**0.5) < 1e-12
+            assert result["iterations"] < 10
+
+        def test_asymptote(self):
+            def s(g):
+                return 1 / (g - 3) - 6
+
+            s_tgt = 0.0
+            # roots at 19 / 6
+            result = ift_1dim(
+                s, s_tgt, "modified_brent", (3.02, 4.0), conv_tol=1e-12, func_tol=1e-12
+            )
+            assert abs(result["g"] - 19 / 6) < 1e-12
+            assert result["iterations"] < 12
+
+        def test_brent(self):
+            def s(x):
+                return exp(x) + x**2
+
+            s_tgt = s(2.0)
+            result = ift_1dim(s, s_tgt, "modified_brent", (1.15, 5.0), conv_tol=1e-12)
+            assert result["g"] == 2.0
+            assert result["iterations"] < 12
+
+            # result2 = ift_1dim(s, s_tgt, "bisection", (1.15, 5.0), conv_tol=1e-12)
+            # assert result["time"] <= result2["time"]
+
+        def test_brent_conv_tol(self):
+            def s(x):
+                return exp(x) + x**2
+
+            s_tgt = s(2.0)
+            result = ift_1dim(s, s_tgt, "modified_brent", (1.15, 5.0), conv_tol=1e-3)
+            assert result["state"] == 1
+
+        def test_paper_replication(self):
+            def s(g):
+                return exp(g**2 / -4.0) - 2 * cos(g) + g / 2.0 - 2.5
+
+            s_tgt = 0.0
+            # roots at 2.1584, 4.6196 and 7.255
+            result = ift_1dim(
+                s, s_tgt, "modified_brent", (1.0, 3.0), conv_tol=1e-12, func_tol=1e-12
+            )
+            assert abs(result["g"] - 2.1584212092981225) < 1e-12
+            assert result["iterations"] < 8
 
     def test_another_func(self):
         def s(g):
@@ -257,6 +437,122 @@ class TestGradients:
         )
         result = self.solver.grad_s_vT
         assert_allclose(expected, result)
+
+
+class TestDocs:
+    @pytest.mark.skipif(
+        sys.version_info[:2] == (3, 10), reason="This test is incompatible with Python 3.10"
+    )
+    def test_external_system_replicator(self):
+        TODAY = dt(2026, 3, 23)
+        SPOT = calendars.get("nyc").lag_bus_days(TODAY, 2, False)
+        TENORS = [
+            "1W",
+            "2W",
+            "3W",
+            "1M",
+            "2M",
+            "3M",
+            "4M",
+            "5M",
+            "6M",
+            "7M",
+            "8M",
+            "9M",
+            "10M",
+            "11M",
+            "12M",
+            "18M",
+            "2Y",
+            "3Y",
+            "4Y",
+            "5Y",
+            "6Y",
+            "7Y",
+            "8Y",
+            "9Y",
+            "10Y",
+            "12Y",
+            "15Y",
+            "20Y",
+            "25Y",
+            "30Y",
+            "40Y",
+            "50Y",
+        ]
+        MATURITIES = [add_tenor(SPOT, _, "MF", "nyc") for _ in TENORS]
+        curve = Curve(
+            nodes={TODAY: 1.0, **dict.fromkeys(MATURITIES, 1.0)},
+            calendar="nyc",
+            convention="act360",
+            id="sofr",
+        )
+        solver = Solver(
+            curves=[curve],
+            instruments=[IRS(SPOT, _, spec="usd_irs", curves=[curve]) for _ in TENORS],
+            s=[
+                3.684,
+                3.6805,
+                3.677,
+                3.6786,
+                3.6941,
+                3.7059,
+                3.71675,
+                3.72315,
+                3.73,
+                3.74215,
+                3.7509,
+                3.75895,
+                3.7656,
+                3.77005,
+                3.7741,
+                3.7373,
+                3.6866,
+                3.6316,
+                3.63217,
+                3.6625,
+                3.706,
+                3.7515,
+                3.7968,
+                3.84117,
+                3.88475,
+                3.9714,
+                4.07703,
+                4.15708,
+                4.15165,
+                4.1093,
+                3.99425,
+                3.875,
+            ],
+        )
+
+        _df = DataFrame(
+            {
+                "tenor": TENORS,
+                "maturity": MATURITIES,
+                "df": [float(curve[_]) for _ in MATURITIES],
+                "rate": [float(IRS(SPOT, _, spec="usd_irs", curves=curve).rate()) for _ in TENORS],
+            }
+        )
+        irs = IRS(
+            dt(2031, 3, 25),
+            dt(2036, 3, 25),
+            spec="usd_irs",
+            curves=["sofr"],
+            fixed_rate=4.0,
+            notional=-100e6,
+        )
+        pv = irs.npv(solver=solver)
+        _ct = irs.cashflows_table(solver=solver)
+        _cf = irs.cashflows(solver=solver)
+        dv01 = irs.delta(solver=solver).sum(axis=None)
+        pv01 = irs.analytic_delta(solver=solver, leg=1)
+        gamma = irs.gamma(solver=solver).sum(axis=None)
+
+        assert abs(pv + 579593.21) < 16.5  # <0.01% deviation
+        assert abs(dv01 + 37518.12) < 3  # <0.01% deviation
+        assert abs(pv01 + 37471.51) < 1.5  # <0.01% deviation
+        assert abs(gamma - 58.50) < 0.004  # <0.01% deviation
 
 
 @pytest.mark.parametrize("algo", ["gauss_newton", "levenberg_marquardt", "gradient_descent"])
@@ -690,8 +986,70 @@ def test_max_iterations() -> None:
             s=s,
             func_tol=1e-10,
             max_iter=30,
+            step_tol=0.0,
+            grad_tol=0.0,
         )
     assert len(solver.g_list) == 31
+
+
+def test_step_tol() -> None:
+    curve = Curve(
+        {
+            dt(2022, 1, 1): 1.0,
+            dt(2023, 1, 1): 1.0,
+            dt(2024, 1, 1): 1.0,
+            dt(2025, 1, 1): 1.0,
+        },
+        id="v",
+    )
+    instruments = [
+        (IRS(dt(2022, 1, 1), "1Y", "Q"), {"curves": curve}),
+        (IRS(dt(2022, 1, 1), "2Y", "Q"), {"curves": curve}),
+        (IRS(dt(2022, 1, 1), "3Y", "Q"), {"curves": curve}),
+        (IRS(dt(2022, 1, 1), "3Y", "Q"), {"curves": curve}),
+    ]
+    s = np.array([1.0, 1.6, 2.02, 1.98])  # average 3Y at approximately 2.0%
+    solver = Solver(
+        curves=[curve],
+        instruments=instruments,
+        s=s,
+        max_iter=30,
+        func_tol=0.0,
+        step_tol=1.0,
+        grad_tol=0.0,
+        conv_tol=0.0,
+    )
+    assert solver.result["state"] == 4
+
+
+def test_grad_tol() -> None:
+    curve = Curve(
+        {
+            dt(2022, 1, 1): 1.0,
+            dt(2023, 1, 1): 1.0,
+            dt(2024, 1, 1): 1.0,
+            dt(2025, 1, 1): 1.0,
+        },
+        id="v",
+    )
+    instruments = [
+        (IRS(dt(2022, 1, 1), "1Y", "Q"), {"curves": curve}),
+        (IRS(dt(2022, 1, 1), "2Y", "Q"), {"curves": curve}),
+        (IRS(dt(2022, 1, 1), "3Y", "Q"), {"curves": curve}),
+        (IRS(dt(2022, 1, 1), "3Y", "Q"), {"curves": curve}),
+    ]
+    s = np.array([1.0, 1.6, 2.02, 1.98])  # average 3Y at approximately 2.0%
+    solver = Solver(
+        curves=[curve],
+        instruments=instruments,
+        s=s,
+        max_iter=30,
+        func_tol=0.0,
+        step_tol=0.0,
+        grad_tol=0.01,
+        conv_tol=0.0,
+    )
+    assert solver.result["state"] == 5
 
 
 def test_solver_pre_solver_dependency_generates_same_delta() -> None:
@@ -2839,3 +3197,186 @@ def test_curves_without_their_own_params(label):
         s=[2.0],
     )
     assert sv.result["status"] == "SUCCESS"
+
+
+def test_from_other() -> None:
+    pricing_curve = Curve(
+        nodes={dt(2000, 1, 1): 1.0, dt(2001, 1, 1): 1.0, dt(2002, 1, 10): 1.0},
+        interpolation="spline",
+        id="sofr",
+    )
+    pricing_solver = Solver(
+        curves=[pricing_curve],
+        instruments=[
+            IRS(dt(2000, 1, 1), "1y", spec="usd_irs", curves=["sofr"]),
+            IRS(dt(2000, 1, 1), "2y", spec="usd_irs", curves=["sofr"]),
+        ],
+        s=[4.10, 4.25],
+        instrument_labels=["1y", "2y"],
+        id="price_sv",
+    )
+
+    risk_curve = Curve(
+        nodes={
+            dt(2000, 1, 1): 1.0,
+            dt(2000, 4, 1): 1.0,
+            dt(2000, 7, 1): 1.0,
+            dt(2000, 10, 1): 1.0,
+            dt(2001, 1, 1): 1.0,
+            dt(2001, 4, 1): 1.0,
+            dt(2001, 7, 1): 1.0,
+            dt(2001, 10, 1): 1.0,
+            dt(2002, 1, 10): 1.0,
+        },
+        interpolation="log_linear",
+        id="sofr",
+    )
+    risk_solver = Solver.from_other(
+        pricing_solver=pricing_solver,
+        curves=[risk_curve],
+        instruments=[
+            IRS(dt(2000, 1, 1), "3m", spec="usd_irs", curves=["sofr"]),
+            IRS(dt(2000, 4, 1), "3m", spec="usd_irs", curves=["sofr"]),
+            IRS(dt(2000, 7, 1), "3m", spec="usd_irs", curves=["sofr"]),
+            IRS(dt(2000, 10, 1), "3m", spec="usd_irs", curves=["sofr"]),
+            IRS(dt(2001, 1, 1), "3m", spec="usd_irs", curves=["sofr"]),
+            IRS(dt(2001, 4, 1), "3m", spec="usd_irs", curves=["sofr"]),
+            IRS(dt(2001, 7, 1), "3m", spec="usd_irs", curves=["sofr"]),
+            IRS(dt(2001, 10, 1), "3m", spec="usd_irs", curves=["sofr"]),
+        ],
+        instrument_labels=["0m3m", "3m3m", "6m3m", "9m3m", "1y3m", "15m3m", "18m3m", "21m3m"],
+        id="risk_sv",
+    )
+
+    expected = [3.967, 3.995, 4.051, 4.134, 4.235, 4.318, 4.375, 4.406]
+    assert all(abs(r - e) < 1e-3 for r, e in zip(expected, risk_solver.s))
+
+
+class TestContainerSolver:
+    # these tests involve a Solver that has no instruments of its own and is just a
+    # wrapper of 1 or multiple `pre_solvers`
+
+    def test_combine_separate_solvers_for_delta(self):
+        curve = Curve({dt(2000, 1, 1): 1.0, dt(2001, 1, 1): 1.0}, id="x")
+        curve2 = Curve({dt(2000, 1, 1): 1.0, dt(2001, 1, 1): 1.0}, id="y")
+        solver = Solver(
+            curves=[curve],
+            instruments=[Value(dt(2000, 9, 12), curves="x", metric="o/n_rate")],
+            s=[2.0],
+            instrument_labels=["X"],
+            id="A1",
+        )
+        solver2 = Solver(
+            curves=[curve2],
+            instruments=[Value(dt(2000, 9, 12), curves="y", metric="o/n_rate")],
+            s=[3.0],
+            instrument_labels=["Y"],
+            id="A2",
+        )
+        solver3 = Solver(pre_solvers=[solver, solver2])
+
+        v = IRS(dt(2000, 9, 12), "1d", "M", curves="x")
+        w = IRS(dt(2000, 9, 12), "1d", "M", curves="y")
+        result = Portfolio([v, w]).delta(solver=solver3)
+
+        m_idx = MultiIndex.from_tuples(
+            [("instruments", "A1", "X"), ("instruments", "A2", "Y")],
+            names=["type", "solver", "label"],
+        )
+        c_idx = MultiIndex.from_tuples([("usd", "usd")], names=["local_ccy", "display_ccy"])
+        expected = DataFrame([0.273825, 0.271870], index=m_idx, columns=c_idx)
+        assert_frame_equal(result, expected)
+
+    def test_combine_separate_solvers_for_exo_delta(self):
+        curve = Curve({dt(2000, 1, 1): 1.0, dt(2001, 1, 1): 1.0}, id="x")
+        curve2 = Curve({dt(2000, 1, 1): 1.0, dt(2001, 1, 1): 1.0}, id="y")
+        solver = Solver(
+            curves=[curve],
+            instruments=[Value(dt(2000, 9, 12), curves="x", metric="o/n_rate")],
+            s=[2.0],
+            instrument_labels=["X"],
+            id="A1",
+        )
+        solver2 = Solver(
+            curves=[curve2],
+            instruments=[Value(dt(2000, 9, 12), curves="y", metric="o/n_rate")],
+            s=[3.0],
+            instrument_labels=["Y"],
+            id="A2",
+        )
+        solver3 = Solver(pre_solvers=[solver, solver2])
+
+        v = IRS(
+            dt(2000, 9, 12), "1d", "M", curves="x", notional=Variable(1e8, ["exo"]), fixed_rate=5
+        )
+        w = IRS(
+            dt(2000, 9, 12), "1d", "M", curves="y", notional=Variable(1e8, ["exo"]), fixed_rate=4
+        )
+        result = (
+            Portfolio([v, w]).exo_delta(solver=solver3, vars=["exo"], vars_scalar=[1e8]).to_numpy()
+        )
+        pv = Portfolio([v, w]).npv(solver=solver3)
+        assert abs(result[0, 0] - pv) < 1e-7
+
+    def test_combine_separate_solvers_for_gamma(self):
+        curve = Curve({dt(2000, 1, 1): 1.0, dt(2001, 1, 1): 1.0}, id="x")
+        curve2 = Curve({dt(2000, 1, 1): 1.0, dt(2001, 1, 1): 1.0}, id="y")
+        solver = Solver(
+            curves=[curve],
+            instruments=[Value(dt(2000, 9, 12), curves="x", metric="o/n_rate")],
+            s=[2.0],
+            instrument_labels=["X"],
+            id="A1",
+        )
+        solver2 = Solver(
+            curves=[curve2],
+            instruments=[Value(dt(2000, 9, 12), curves="y", metric="o/n_rate")],
+            s=[3.0],
+            instrument_labels=["Y"],
+            id="A2",
+        )
+        solver3 = Solver(pre_solvers=[solver, solver2])
+
+        v = IRS(dt(2000, 9, 12), "1d", "M", curves="x")
+        w = IRS(dt(2000, 9, 12), "1d", "M", curves="y")
+        result = Portfolio([v, w]).gamma(solver=solver3).to_numpy()
+
+        partial_result1 = v.gamma(solver=solver).to_numpy()
+        partial_result2 = w.gamma(solver=solver2).to_numpy()
+
+        assert np.all(
+            result
+            == np.block(
+                [
+                    [partial_result1, np.zeros(shape=(1, 1))],
+                    [np.zeros(shape=(1, 1)), partial_result2],
+                ]
+            )
+        )
+
+    def test_combine_separate_solvers_error(self):
+        curve = Curve({dt(2000, 1, 1): 1.0, dt(2001, 1, 1): 1.0}, id="x")
+        curve2 = Curve({dt(2000, 1, 1): 1.0, dt(2001, 1, 1): 1.0}, id="y")
+        solver = Solver(
+            curves=[curve],
+            instruments=[Value(dt(2000, 9, 12), curves="x", metric="o/n_rate")],
+            s=[2.0],
+            instrument_labels=["X"],
+            id="A1",
+        )
+        solver2 = Solver(
+            curves=[curve2],
+            instruments=[Value(dt(2000, 9, 12), curves="y", metric="o/n_rate")],
+            s=[3.0],
+            instrument_labels=["Y"],
+            id="A2",
+        )
+        solver3 = Solver(pre_solvers=[solver, solver2])
+        result = solver3.error
+        assert isinstance(result, Series)
+
+    def test_error_empty(self):
+        s1 = Solver()
+        s2 = Solver()
+        s3 = Solver(pre_solvers=[s1, s2])
+        assert s3.error.empty

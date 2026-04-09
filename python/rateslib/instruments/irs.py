@@ -21,16 +21,18 @@ from rateslib.instruments.protocols import _BaseInstrument
 from rateslib.instruments.protocols.kwargs import _convert_to_schedule_kwargs, _KWArgs
 from rateslib.instruments.protocols.pricing import (
     _Curves,
+    _get_curve,
     _get_fx_forwards_maybe_from_solver,
-    _maybe_get_curve_maybe_from_solver,
-    _maybe_get_curve_or_dict_maybe_from_solver,
+    _parse_curves,
     _Vol,
 )
 from rateslib.legs import FixedLeg, FloatLeg
 
 if TYPE_CHECKING:
-    from rateslib.typing import (  # pragma: no cover
+    from rateslib.local_types import (  # pragma: no cover
+        Adjuster,
         CalInput,
+        Convention,
         CurvesT_,
         DataFrame,
         DualTypes,
@@ -66,6 +68,7 @@ class IRS(_BaseInstrument):
        from rateslib.data.fixings import FXIndex
        from datetime import datetime as dt
        from rateslib import fixings
+       from pandas import Series
 
     .. ipython:: python
 
@@ -89,6 +92,8 @@ class IRS(_BaseInstrument):
        curves = [rate_curve, disc_curve]  #  two curves are applied in the given order
        curves = [None, disc_curve, rate_curve, disc_curve]     # four curves applied to each leg
        curves = {"leg2_rate_curve": rate_curve, "disc_curve": disc_curve}  # dict form is explicit
+
+    ``metric`` is unused by *IRS* and is always fixed '*rate*'.
 
     .. role:: red
 
@@ -151,9 +156,9 @@ class IRS(_BaseInstrument):
         The :class:`~rateslib.scheduling.Adjuster` to use to map adjusted schedule dates into
         additional dates, which may be used, for example by fixings schedules. If given as integer
         will define the number of business days to lag dates by.
-    convention: str, :green:`optional (set by 'defaults')`
-        The day count convention applied to calculations of period accrual dates.
-        See :meth:`~rateslib.scheduling.dcf`.
+    convention: Convention, str, :green:`optional (set by 'defaults')`
+        The :class:`~rateslib.scheduling.Convention` applied to calculations of period accrual
+        dates. See :meth:`~rateslib.scheduling.dcf`.
     leg2_effective : datetime, :green:`optional (inherited from leg1)`
     leg2_termination : datetime, str, :green:`optional (inherited from leg1)`
     leg2_frequency : Frequency, str, :green:`optional (inherited from leg1)`
@@ -167,7 +172,7 @@ class IRS(_BaseInstrument):
     leg2_payment_lag: Adjuster, int, :green:`optional (inherited from leg1)`
     leg2_payment_lag_exchange: Adjuster, int, :green:`optional (inherited from leg1)`
     leg2_ex_div: Adjuster, int, :green:`optional (inherited from leg1)`
-    leg2_convention: str, :green:`optional (inherited from leg1)`
+    leg2_convention: Convention, str, :green:`optional (inherited from leg1)`
 
         .. note::
 
@@ -192,10 +197,8 @@ class IRS(_BaseInstrument):
         The fixed rate applied to the :class:`~rateslib.legs.FixedLeg`. If `None`
         will be set to mid-market when curves are provided.
     leg2_fixing_method: FloatFixingMethod, str, :green:`optional (set by 'defaults')`
-        The :class:`~rateslib.enums.parameters.FloatFixingMethod` describing the determination
+        The :class:`~rateslib.enums.FloatFixingMethod` describing the determination
         of the floating rate for each period.
-    leg2_method_param: int, :green:`optional (set by 'defaults')`
-        A specific parameter that is used by the specific ``fixing_method``.
     leg2_fixing_frequency: Frequency, str, :green:`optional (set by 'frequency' or '1B')`
         The :class:`~rateslib.scheduling.Frequency` as a component of the
         :class:`~rateslib.data.fixings.FloatRateIndex`. If not given is assumed to match the
@@ -203,7 +206,7 @@ class IRS(_BaseInstrument):
     leg2_fixing_series: FloatRateSeries, str, :green:`optional (implied by other parameters)`
         The :class:`~rateslib.data.fixings.FloatRateSeries` as a component of the
         :class:`~rateslib.data.fixings.FloatRateIndex`. If not given inherits attributes given
-        such as the ``calendar``, ``convention``, ``method_param`` etc.
+        such as the ``calendar``, ``convention``, ``fixing_method`` etc.
     leg2_float_spread: float, Dual, Dual2, Variable, :green:`optional (set as 0.0)`
         The amount (in bps) added to the rate in each period rate determination.
     leg2_spread_compound_method: SpreadCompoundMethod, str, :green:`optional (set by 'defaults')`
@@ -214,6 +217,9 @@ class IRS(_BaseInstrument):
         See :ref:`Fixings <fixings-doc>`.
         The value of the rate fixing. If a scalar, is used directly. If a string identifier, links
         to the central ``fixings`` object and data loader.
+    leg2_zero_periods: bool, :green:`optional (set as False)`
+        Used to define whether to use a multi-period IBOR classification. See
+        :class:`~rateslib.legs.FloatLeg` for examples.
 
         .. note::
 
@@ -338,12 +344,12 @@ class IRS(_BaseInstrument):
         back_stub: datetime_ = NoInput(0),
         roll: int | RollDay | str_ = NoInput(0),
         eom: bool_ = NoInput(0),
-        modifier: str_ = NoInput(0),
+        modifier: Adjuster | str_ = NoInput(0),
         calendar: CalInput = NoInput(0),
-        payment_lag: int_ = NoInput(0),
-        payment_lag_exchange: int_ = NoInput(0),
-        ex_div: int_ = NoInput(0),
-        convention: str_ = NoInput(0),
+        payment_lag: Adjuster | str | int_ = NoInput(0),
+        payment_lag_exchange: Adjuster | str | int_ = NoInput(0),
+        ex_div: Adjuster | str | int_ = NoInput(0),
+        convention: Convention | str_ = NoInput(0),
         leg2_effective: datetime_ = NoInput(1),
         leg2_termination: datetime | str_ = NoInput(1),
         leg2_frequency: Frequency | str_ = NoInput(1),
@@ -352,12 +358,12 @@ class IRS(_BaseInstrument):
         leg2_back_stub: datetime_ = NoInput(1),
         leg2_roll: int | RollDay | str_ = NoInput(1),
         leg2_eom: bool_ = NoInput(1),
-        leg2_modifier: str_ = NoInput(1),
+        leg2_modifier: Adjuster | str_ = NoInput(1),
         leg2_calendar: CalInput = NoInput(1),
-        leg2_payment_lag: int_ = NoInput(1),
-        leg2_payment_lag_exchange: int_ = NoInput(1),
-        leg2_ex_div: int_ = NoInput(1),
-        leg2_convention: str_ = NoInput(1),
+        leg2_payment_lag: Adjuster | str | int_ = NoInput(1),
+        leg2_payment_lag_exchange: Adjuster | str | int_ = NoInput(1),
+        leg2_ex_div: Adjuster | str | int_ = NoInput(1),
+        leg2_convention: Convention | str_ = NoInput(1),
         # settlement parameters
         currency: str_ = NoInput(0),
         notional: float_ = NoInput(0),
@@ -374,9 +380,9 @@ class IRS(_BaseInstrument):
         leg2_spread_compound_method: str_ = NoInput(0),
         leg2_rate_fixings: LegFixings = NoInput(0),
         leg2_fixing_method: str_ = NoInput(0),
-        leg2_method_param: int_ = NoInput(0),
         leg2_fixing_frequency: Frequency | str_ = NoInput(0),
         leg2_fixing_series: FloatRateSeries | str_ = NoInput(0),
+        leg2_zero_periods: bool_ = NoInput(0),
         # meta parameters
         curves: CurvesT_ = NoInput(0),
         spec: str_ = NoInput(0),
@@ -427,9 +433,9 @@ class IRS(_BaseInstrument):
             leg2_spread_compound_method=leg2_spread_compound_method,
             leg2_rate_fixings=leg2_rate_fixings,
             leg2_fixing_method=leg2_fixing_method,
-            leg2_method_param=leg2_method_param,
             leg2_fixing_series=leg2_fixing_series,
             leg2_fixing_frequency=leg2_fixing_frequency,
+            leg2_zero_periods=leg2_zero_periods,
             # meta
             curves=self._parse_curves(curves),
         )
@@ -473,16 +479,16 @@ class IRS(_BaseInstrument):
         forward: datetime_ = NoInput(0),
         metric: str_ = NoInput(0),
     ) -> DualTypes:
-        _curves = self._parse_curves(curves)
+        c = _parse_curves(self, curves, solver)
+        leg2_rate_curve = _get_curve("leg2_rate_curve", True, True, *c)
+        leg2_disc_curve = _get_curve("leg2_disc_curve", False, True, *c)
+        disc_curve = _get_curve("disc_curve", False, True, *c)
+
         fx_ = _get_fx_forwards_maybe_from_solver(solver, fx)
 
         leg2_npv: DualTypes = self.leg2.local_npv(
-            rate_curve=_maybe_get_curve_or_dict_maybe_from_solver(
-                self.kwargs.meta["curves"], _curves, "leg2_rate_curve", solver
-            ),
-            disc_curve=_maybe_get_curve_maybe_from_solver(
-                self.kwargs.meta["curves"], _curves, "leg2_disc_curve", solver
-            ),
+            rate_curve=leg2_rate_curve,
+            disc_curve=leg2_disc_curve,
             index_curve=NoInput(0),
             fx=fx_,
             settlement=settlement,
@@ -492,9 +498,7 @@ class IRS(_BaseInstrument):
             self.leg1.spread(
                 target_npv=-leg2_npv,
                 rate_curve=NoInput(0),
-                disc_curve=_maybe_get_curve_maybe_from_solver(
-                    self.kwargs.meta["curves"], _curves, "disc_curve", solver
-                ),
+                disc_curve=disc_curve,
                 fx=fx_,
                 index_curve=NoInput(0),
                 settlement=settlement,
@@ -514,14 +518,12 @@ class IRS(_BaseInstrument):
         settlement: datetime_ = NoInput(0),
         forward: datetime_ = NoInput(0),
     ) -> DualTypes:
-        _curves = self._parse_curves(curves)
+        c = _parse_curves(self, curves, solver)
+        leg2_rate_curve = _get_curve("leg2_rate_curve", True, True, *c)
+        disc_curve = _get_curve("disc_curve", False, True, *c)
+
         fx_ = _get_fx_forwards_maybe_from_solver(solver, fx)
-        leg2_rate_curve = _maybe_get_curve_or_dict_maybe_from_solver(
-            self.kwargs.meta["curves"], _curves, "leg2_rate_curve", solver
-        )
-        disc_curve = _maybe_get_curve_maybe_from_solver(
-            self.kwargs.meta["curves"], _curves, "disc_curve", solver
-        )
+
         leg1_npv: DualTypes = self.leg1.local_npv(
             rate_curve=NoInput(0),
             disc_curve=disc_curve,
@@ -593,7 +595,8 @@ class IRS(_BaseInstrument):
     def _parse_vol(self, vol: VolT_) -> _Vol:
         return _Vol()
 
-    def _parse_curves(self, curves: CurvesT_) -> _Curves:
+    @classmethod
+    def _parse_curves(cls, curves: CurvesT_) -> _Curves:
         """
         An IRS has two curve requirements: a leg2_rate_curve and a disc_curve used by both legs.
 
@@ -625,7 +628,7 @@ class IRS(_BaseInstrument):
                 )
             else:
                 raise ValueError(
-                    f"{type(self).__name__} requires only 2 curve types. Got {len(curves)}."
+                    f"{type(cls).__name__} requires only 2 curve types. Got {len(curves)}."
                 )
         elif isinstance(curves, dict):
             return _Curves(

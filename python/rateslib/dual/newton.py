@@ -23,7 +23,7 @@ from rateslib.dual.variable import Variable
 from rateslib.rs import Dual, Dual2
 
 if TYPE_CHECKING:
-    from rateslib.typing import DualTypes
+    from rateslib.local_types import DualTypes
 P = ParamSpec("P")
 
 # Licence: Creative Commons - Attribution-NonCommercial-NoDerivatives 4.0 International
@@ -34,6 +34,8 @@ STATE_MAP = {
     1: ["SUCCESS", "`conv_tol` reached"],
     2: ["SUCCESS", "`func_tol` reached"],
     3: ["SUCCESS", "closed form valid"],
+    4: ["SUCCESS", "`step_tol` reached"],
+    5: ["SUCCESS", "`grad_tol` reached"],
     -1: ["FAILURE", "`max_iter` breached"],
     -2: ["FAILURE", "internal iteration function failure"],
 }

@@ -20,14 +20,14 @@ from rateslib.instruments.protocols import _BaseInstrument
 from rateslib.instruments.protocols.kwargs import _convert_to_schedule_kwargs, _KWArgs
 from rateslib.instruments.protocols.pricing import (
     _Curves,
-    _maybe_get_curve_maybe_from_solver,
-    _maybe_get_curve_or_dict_maybe_from_solver,
+    _get_curve,
+    _parse_curves,
     _Vol,
 )
 from rateslib.legs import ZeroFixedLeg, ZeroFloatLeg
 
 if TYPE_CHECKING:
-    from rateslib.typing import (  # pragma: no cover
+    from rateslib.local_types import (  # pragma: no cover
         CalInput,
         CurvesT_,
         DataFrame,
@@ -185,8 +185,6 @@ class ZCS(_BaseInstrument):
     leg2_fixing_method: FloatFixingMethod, str, :green:`optional (set by 'defaults')`
         The :class:`~rateslib.enums.parameters.FloatFixingMethod` describing the determination
         of the floating rate for each period.
-    leg2_method_param: int, :green:`optional (set by 'defaults')`
-        A specific parameter that is used by the specific ``fixing_method``.
     leg2_fixing_frequency: Frequency, str, :green:`optional (set by 'frequency' or '1B')`
         The :class:`~rateslib.scheduling.Frequency` as a component of the
         :class:`~rateslib.data.fixings.FloatRateIndex`. If not given is assumed to match the
@@ -194,7 +192,7 @@ class ZCS(_BaseInstrument):
     leg2_fixing_series: FloatRateSeries, str, :green:`optional (implied by other parameters)`
         The :class:`~rateslib.data.fixings.FloatRateSeries` as a component of the
         :class:`~rateslib.data.fixings.FloatRateIndex`. If not given inherits attributes given
-        such as the ``calendar``, ``convention``, ``method_param`` etc.
+        such as the ``calendar``, ``convention``, ``fixing_method`` etc.
     leg2_float_spread: float, Dual, Dual2, Variable, :green:`optional (set as 0.0)`
         The amount (in bps) added to the rate in each period rate determination.
     leg2_spread_compound_method: SpreadCompoundMethod, str, :green:`optional (set by 'defaults')`
@@ -312,7 +310,6 @@ class ZCS(_BaseInstrument):
         leg2_spread_compound_method: str_ = NoInput(0),
         leg2_rate_fixings: FixingsRates_ = NoInput(0),
         leg2_fixing_method: str_ = NoInput(0),
-        leg2_method_param: int_ = NoInput(0),
         leg2_fixing_frequency: Frequency | str_ = NoInput(0),
         leg2_fixing_series: FloatRateSeries | str_ = NoInput(0),
         # meta parameters
@@ -359,7 +356,6 @@ class ZCS(_BaseInstrument):
             leg2_spread_compound_method=leg2_spread_compound_method,
             leg2_rate_fixings=leg2_rate_fixings,
             leg2_fixing_method=leg2_fixing_method,
-            leg2_method_param=leg2_method_param,
             leg2_fixing_series=leg2_fixing_series,
             leg2_fixing_frequency=leg2_fixing_frequency,
             # meta
@@ -404,15 +400,14 @@ class ZCS(_BaseInstrument):
         forward: datetime_ = NoInput(0),
         metric: str_ = NoInput(0),
     ) -> DualTypes:
-        _curves = self._parse_curves(curves)
+        c = _parse_curves(self, curves, solver)
+        leg2_rate_curve = _get_curve("leg2_rate_curve", True, True, *c)
+        leg2_disc_curve = _get_curve("leg2_disc_curve", False, False, *c)
+        disc_curve = _get_curve("disc_curve", False, False, *c)
 
         leg2_npv: DualTypes = self.leg2.local_npv(
-            rate_curve=_maybe_get_curve_or_dict_maybe_from_solver(
-                self.kwargs.meta["curves"], _curves, "leg2_rate_curve", solver
-            ),
-            disc_curve=_maybe_get_curve_maybe_from_solver(
-                self.kwargs.meta["curves"], _curves, "leg2_disc_curve", solver
-            ),
+            rate_curve=leg2_rate_curve,
+            disc_curve=leg2_disc_curve,
             index_curve=NoInput(0),
             settlement=settlement,
             forward=forward,
@@ -421,9 +416,7 @@ class ZCS(_BaseInstrument):
             self.leg1.spread(
                 target_npv=-leg2_npv,
                 rate_curve=NoInput(0),
-                disc_curve=_maybe_get_curve_maybe_from_solver(
-                    self.kwargs.meta["curves"], _curves, "disc_curve", solver
-                ),
+                disc_curve=disc_curve,
                 index_curve=NoInput(0),
                 settlement=settlement,
                 forward=forward,
@@ -442,13 +435,11 @@ class ZCS(_BaseInstrument):
         settlement: datetime_ = NoInput(0),
         forward: datetime_ = NoInput(0),
     ) -> DualTypes:
-        _curves = self._parse_curves(curves)
-        leg2_rate_curve = _maybe_get_curve_or_dict_maybe_from_solver(
-            self.kwargs.meta["curves"], _curves, "leg2_rate_curve", solver
-        )
-        disc_curve = _maybe_get_curve_maybe_from_solver(
-            self.kwargs.meta["curves"], _curves, "disc_curve", solver
-        )
+        c = _parse_curves(self, curves, solver)
+        leg2_rate_curve = _get_curve("leg2_rate_curve", True, True, *c)
+        disc_curve = _get_curve("disc_curve", False, False, *c)
+        leg2_disc_curve = _get_curve("leg2_disc_curve", False, False, *c)
+
         leg1_npv: DualTypes = self.leg1.local_npv(
             rate_curve=NoInput(0),
             disc_curve=disc_curve,
@@ -459,7 +450,7 @@ class ZCS(_BaseInstrument):
         return self.leg2.spread(
             target_npv=-leg1_npv,
             rate_curve=leg2_rate_curve,
-            disc_curve=disc_curve,
+            disc_curve=leg2_disc_curve,
             index_curve=NoInput(0),
             settlement=settlement,
             forward=forward,

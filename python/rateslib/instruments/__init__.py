@@ -20,6 +20,7 @@ from rateslib.instruments.bonds import (
     _BaseBondInstrument,
 )
 from rateslib.instruments.cds import CDS
+from rateslib.instruments.fee import Fee
 from rateslib.instruments.fly import Fly
 from rateslib.instruments.fra import FRA
 from rateslib.instruments.fx_forward import FXForward
@@ -30,13 +31,24 @@ from rateslib.instruments.fx_options import (
     FXRiskReversal,
     FXStraddle,
     FXStrangle,
+    FXVolValue,
     _BaseFXOption,
     _BaseFXOptionStrat,
 )
 from rateslib.instruments.fx_swap import FXSwap
-from rateslib.instruments.fx_vol_value import FXVolValue
 from rateslib.instruments.iirs import IIRS
+from rateslib.instruments.ir_options import (
+    IRSCall,
+    IRSPut,
+    IRSRiskReversal,
+    IRSStraddle,
+    IRSStrangle,
+    IRVolValue,
+    _BaseIRSOption,
+    _BaseIRSOptionStrat,
+)
 from rateslib.instruments.irs import IRS
+from rateslib.instruments.loan import Loan
 from rateslib.instruments.ndf import NDF
 from rateslib.instruments.ndxcs import NDXCS
 from rateslib.instruments.portfolio import Portfolio
@@ -46,6 +58,7 @@ from rateslib.instruments.spread import Spread
 from rateslib.instruments.stir_future import STIRFuture
 from rateslib.instruments.value import Value
 from rateslib.instruments.xcs import XCS
+from rateslib.instruments.yoyis import YoYIS
 from rateslib.instruments.zcis import ZCIS
 from rateslib.instruments.zcs import ZCS
 
@@ -65,6 +78,7 @@ __all__ = [
     # inflation
     "ZCIS",
     "IIRS",
+    "YoYIS",
     # credit
     "CDS",
     # securities
@@ -73,6 +87,8 @@ __all__ = [
     "IndexFixedRateBond",
     "BondFuture",
     "Bill",
+    "Fee",
+    "Loan",
     # fx options
     "FXPut",
     "FXCall",
@@ -80,16 +96,25 @@ __all__ = [
     "FXStraddle",
     "FXStrangle",
     "FXBrokerFly",
+    # ir options
+    "IRSPut",
+    "IRSCall",
+    "IRSRiskReversal",
+    "IRSStraddle",
+    "IRSStrangle",
     # generics
     "Portfolio",
     "Fly",
     "Spread",
     "Value",
     "FXVolValue",
+    "IRVolValue",
     "BondCalcMode",
     "BillCalcMode",
     "_BaseInstrument",
     "_BaseBondInstrument",
     "_BaseFXOption",
     "_BaseFXOptionStrat",
+    "_BaseIRSOption",
+    "_BaseIRSOptionStrat",
 ]

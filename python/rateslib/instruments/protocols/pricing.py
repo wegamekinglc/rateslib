@@ -12,33 +12,39 @@
 from __future__ import annotations
 
 import warnings
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol, overload
 
 from rateslib import defaults
 from rateslib.curves import MultiCsaCurve, ProxyCurve
 from rateslib.dual import Dual, Dual2, Variable
 from rateslib.enums.generics import NoInput, _drb
+from rateslib.volatility import _BaseIRCube, _BaseIRSmile
 
 if TYPE_CHECKING:
-    from rateslib.typing import (
+    from rateslib.local_types import (  # pragma: no cover
         FX_,
         Any,
         CurvesT_,
+        DualTypes,
         FXForwards_,
         FXVol_,
+        IRVol_,
+        NoInput,
         Solver,
         Solver_,
+        VolStrat_,
         VolT_,
         _BaseCurve,
         _BaseCurve_,
         _BaseCurveOrDict,
         _BaseCurveOrDict_,
         _BaseCurveOrId,
-        _BaseCurveOrId_,
         _BaseCurveOrIdOrIdDict,
         _BaseCurveOrIdOrIdDict_,
+        _BaseInstrument,
         _FXVolObj,
-        _FXVolOption_,
+        _IRVolObj,
+        _IRVolOption_,
     )
 
 
@@ -145,178 +151,221 @@ class _Vol:
         self,
         *,
         fx_vol: FXVol_ = NoInput(0),
+        ir_vol: IRVol_ = NoInput(0),
     ):
         self._fx_vol = fx_vol
+        self._ir_vol = ir_vol
 
     @property
     def fx_vol(self) -> FXVol_:
         """The FX vol object used for modelling FX volatility."""
         return self._fx_vol
 
+    @property
+    def ir_vol(self) -> IRVol_:
+        """The IR vol object used for modelling IR volatility."""
+        return self._ir_vol
+
     def __eq__(self, other: Any) -> bool:
         if not isinstance(other, _Vol):
             return False
         else:
-            return self.fx_vol == other.fx_vol
+            return self.fx_vol == other.fx_vol and self.ir_vol == other.ir_vol
+
+
+def _parse_curves(
+    obj: _BaseInstrument, curves: CurvesT_, solver: Solver_
+) -> tuple[_Curves, _Curves, Solver_]:
+    return (obj._parse_curves(curves), obj.kwargs.meta["curves"], solver)
+
+
+@overload
+def _parse_vol(
+    obj: _BaseInstrument,
+    vol: VolT_,
+    solver: Solver_,
+    sequence: Literal[False],
+) -> tuple[_Vol, _Vol, Solver_]: ...
+
+
+@overload
+def _parse_vol(
+    obj: _BaseInstrument,
+    vol: VolStrat_,
+    solver: Solver_,
+    sequence: Literal[True],
+) -> tuple[VolStrat_, VolStrat_, Solver_]: ...
+
+
+def _parse_vol(
+    obj: _BaseInstrument,
+    vol: VolT_ | VolStrat_,
+    solver: Solver_,
+    sequence: bool,
+) -> tuple[_Vol | VolStrat_, _Vol | VolStrat_, Solver_]:
+    return obj._parse_vol(vol), obj.kwargs.meta["vol"], solver  # type: ignore[arg-type]
 
 
 # Solver and Curve mapping
 
 
-def _maybe_get_curve_or_dict_maybe_from_solver(
-    curves_meta: _Curves,
-    curves: _Curves,
+@overload
+def _get_curve(
     name: str,
+    allow_dict: Literal[False],
+    allow_no_input: Literal[True],
+    curves: _Curves,
+    curves_meta: _Curves,
+    solver: Solver_,
+) -> _BaseCurve_: ...
+
+
+@overload
+def _get_curve(
+    name: str,
+    allow_dict: Literal[False],
+    allow_no_input: Literal[False],
+    curves: _Curves,
+    curves_meta: _Curves,
+    solver: Solver_,
+) -> _BaseCurve: ...
+
+
+@overload
+def _get_curve(
+    name: str,
+    allow_dict: Literal[True],
+    allow_no_input: Literal[True],
+    curves: _Curves,
+    curves_meta: _Curves,
+    solver: Solver_,
+) -> _BaseCurveOrDict_: ...
+
+
+@overload
+def _get_curve(
+    name: str,
+    allow_dict: Literal[True],
+    allow_no_input: Literal[False],
+    curves: _Curves,
+    curves_meta: _Curves,
+    solver: Solver_,
+) -> _BaseCurveOrDict: ...
+
+
+def _get_curve(
+    name: str,
+    allow_dict: bool,
+    allow_no_input: bool,
+    curves: _Curves,
+    curves_meta: _Curves,
     solver: Solver_,
 ) -> _BaseCurveOrDict_:
-    """
-    This function is used by many pricing methods to lookup a particular requested curve and
-    return it, either directly from the provided input or via its string id and a Solver mapping.
-
-    When a string id is provided and a Solver is missing this function will raise, which is the
-    preferred method for performing calulations, e.g. `npv` or `rate`.
-
-    This function can return a dict of curves, e.g. {1m: curve, 3m: curve2} for use with
-    IBOR stub pricing as a *rate curve*.
-    """
-
     curve: _BaseCurveOrIdOrIdDict_ = _drb(getattr(curves_meta, name), getattr(curves, name))
-    if isinstance(curve, NoInput):
-        return curve
+    if isinstance(curve, NoInput) or curve is None:
+        if allow_no_input:
+            return NoInput(0)
+        else:
+            raise ValueError(f"`{name}` must be provided. Got NoInput.")
     elif isinstance(solver, NoInput):
-        return _validate_curve_is_not_id(curve=curve)
+        return _validate_base_curve_or_dict(  # type: ignore[no-any-return, call-overload]
+            curve=curve, allow_dict=allow_dict, allow_no_input=allow_no_input
+        )
     else:
-        return _get_curve_from_solver(
+        return _get_curve_from_solver(  # type: ignore[no-any-return, call-overload]
             curve=curve,
             solver=solver,
+            allow_dict=allow_dict,
         )
 
 
-def _maybe_get_curve_maybe_from_solver(
-    curves_meta: _Curves,
-    curves: _Curves,
-    name: str,
-    solver: Solver_,
-) -> _BaseCurve_:
-    """
-    This function is used by many pricing methods to lookup a particular requested curve and
-    return it, either directly from the provided input or via its string id and a Solver mapping.
-
-    When a string id is provided and a Solver is missing this function will raise, which is the
-    preferred method for performing calulations, e.g. `npv` or `rate`.
-
-    This function should not return a dict of curves so is best suited for determining discount
-    factor, index, or credit type single curves.
-    """
-    curve: _BaseCurveOrId_ = _drb(getattr(curves_meta, name), getattr(curves, name))
-    if isinstance(curve, NoInput):
-        return curve
-    elif isinstance(solver, NoInput):
-        return _validate_base_curve_is_not_id(curve=curve)
-    else:
-        # TODO: use overloads typing on '_get_curve_from_solver'
-        return _get_curve_from_solver(  # type: ignore[return-value]  # cannot return a dict
-            curve=curve,
-            solver=solver,
-        )
+@overload
+def _validate_base_curve_or_dict(
+    curve: _BaseCurveOrIdOrIdDict,
+    allow_dict: Literal[True],
+    allow_no_input: Literal[True],
+) -> _BaseCurveOrDict_: ...
 
 
-def _validate_curve_is_not_id(curve: _BaseCurveOrIdOrIdDict) -> _BaseCurveOrDict_:
+@overload
+def _validate_base_curve_or_dict(
+    curve: _BaseCurveOrIdOrIdDict,
+    allow_dict: Literal[True],
+    allow_no_input: Literal[False],
+) -> _BaseCurveOrDict: ...
+
+
+@overload
+def _validate_base_curve_or_dict(
+    curve: _BaseCurveOrIdOrIdDict,
+    allow_dict: Literal[False],
+    allow_no_input: Literal[True],
+) -> _BaseCurve_: ...
+
+
+@overload
+def _validate_base_curve_or_dict(
+    curve: _BaseCurveOrIdOrIdDict,
+    allow_dict: Literal[False],
+    allow_no_input: Literal[False],
+) -> _BaseCurve: ...
+
+
+def _validate_base_curve_or_dict(
+    curve: _BaseCurveOrIdOrIdDict,
+    allow_dict: bool,
+    allow_no_input: bool,
+) -> _BaseCurveOrDict_:
     """
     Validate that a curve input is an object and not a string id.
     """
     if isinstance(curve, dict):
-        return {k: _validate_base_curve_is_not_id(v) for k, v in curve.items()}
-    elif isinstance(curve, NoInput) or curve is None:
-        return NoInput(0)
+        if not allow_dict:
+            raise ValueError("Cannot supply a dict type object as this `curve`.")
+        else:
+            return {
+                k: _validate_base_curve(v, allow_no_input=allow_no_input)  # type: ignore[call-overload]
+                for k, v in curve.items()
+            }
     else:
-        return _validate_base_curve_is_not_id(curve)
+        return _validate_base_curve(curve, allow_no_input=allow_no_input)  # type: ignore[no-any-return, call-overload]
 
 
-def _validate_base_curve_is_not_id(curve: _BaseCurveOrId) -> _BaseCurve:
-    if isinstance(curve, str):  # curve is a str ID
-        raise ValueError(
-            f"`curves` must contain _BaseCurve, not str, if `solver` not given. Got id: '{curve}'"
-        )
-    return curve
+@overload
+def _validate_base_curve(curve: _BaseCurveOrId, allow_no_input: Literal[False]) -> _BaseCurve: ...
 
 
-def _maybe_get_curve_or_dict_object_maybe_from_solver(
-    curves_meta: _Curves,
-    curves: _Curves,
-    name: str,
-    solver: Solver_,
-) -> _BaseCurveOrDict_:
-    """
-    This function is used by many pricing methods to lookup a particular requested curve and
-    return it, either directly from the provided input or via its string id and a Solver mapping.
-
-    When a string id is provided and a Solver is missing this function will convert that to
-    a NoInput, which is the preferred method for use with `cashflow` generators which are
-    allowed to fail and return null values.
-
-    This function can also return a dict of values.
-    """
-
-    curve: _BaseCurveOrIdOrIdDict_ = _drb(getattr(curves_meta, name), getattr(curves, name))
-    if isinstance(curve, NoInput):
-        return curve
-    elif isinstance(solver, NoInput):
-        return _convert_curve_id_to_no_input(curve=curve)
-    else:
-        return _get_curve_from_solver(
-            curve=curve,
-            solver=solver,
-        )
+@overload
+def _validate_base_curve(curve: _BaseCurveOrId, allow_no_input: Literal[True]) -> _BaseCurve_: ...
 
 
-def _maybe_get_curve_object_maybe_from_solver(
-    curves_meta: _Curves,
-    curves: _Curves,
-    name: str,
-    solver: Solver_,
-) -> _BaseCurve_:
-    """
-    This function is used by many pricing methods to lookup a particular requested curve and
-    return it, either directly from the provided input or via its string id and a Solver mapping.
-
-    When a string id is provided and a Solver is missing this function will convert that to
-    a NoInput, which is the preferred method for use with `cashflow` generators which are
-    allowed to fail and return null values.
-
-    This function should not return a dict of curves.
-    """
-    curve: _BaseCurveOrId_ = _drb(getattr(curves_meta, name), getattr(curves, name))
-    if isinstance(curve, NoInput):
-        return curve
-    elif isinstance(solver, NoInput):
-        return _convert_base_curve_id_to_no_input(curve=curve)
-    else:
-        # TODO: use overloads typing on '_get_curve_from_solver'
-        return _get_curve_from_solver(  # type: ignore[return-value]  # cannot return a dict
-            curve=curve,
-            solver=solver,
-        )
-
-
-def _convert_curve_id_to_no_input(curve: _BaseCurveOrIdOrIdDict) -> _BaseCurveOrDict_:
-    if isinstance(curve, dict):
-        # may return {str: NoInput} not understood by typing
-        return {k: _convert_base_curve_id_to_no_input(v) for k, v in curve.items()}  # type: ignore[misc]
-    elif isinstance(curve, NoInput) or curve is None:
-        return NoInput(0)
-    else:
-        return _convert_base_curve_id_to_no_input(curve)
-
-
-def _convert_base_curve_id_to_no_input(curve: _BaseCurveOrId) -> _BaseCurve_:
-    # used by cashflow methods to return NoInput curves when they are not available
+def _validate_base_curve(curve: _BaseCurveOrId, allow_no_input: bool) -> _BaseCurve_:
     if isinstance(curve, str):
-        return NoInput(0)
+        if allow_no_input:
+            return NoInput(0)
+        else:
+            raise ValueError(
+                f"`curves` must contain _BaseCurve, not str, if `solver` not given. "
+                f"Got id: '{curve}'"
+            )
     return curve
 
 
-def _get_curve_from_solver(curve: _BaseCurveOrIdOrIdDict, solver: Solver) -> _BaseCurveOrDict:
+@overload
+def _get_curve_from_solver(
+    curve: _BaseCurveOrIdOrIdDict, solver: Solver, allow_dict: Literal[True]
+) -> _BaseCurveOrDict: ...
+
+
+@overload
+def _get_curve_from_solver(
+    curve: _BaseCurveOrIdOrIdDict, solver: Solver, allow_dict: Literal[False]
+) -> _BaseCurve: ...
+
+
+def _get_curve_from_solver(
+    curve: _BaseCurveOrIdOrIdDict, solver: Solver, allow_dict: bool
+) -> _BaseCurveOrDict:
     """
     Maps a "Curve | str | dict[str, Curve | str]" to a "Curve | dict[str, Curve]" via a Solver.
 
@@ -325,6 +374,8 @@ def _get_curve_from_solver(curve: _BaseCurveOrIdOrIdDict, solver: Solver) -> _Ba
     This is the explicit variety which does not handle NoInput.
     """
     if isinstance(curve, dict):
+        if not allow_dict:
+            raise ValueError("Cannot supply a dict type object as this `curve`.")
         parsed_dict: dict[str, _BaseCurve] = {
             k: _parse_curve_or_id_from_solver_(curve=v, solver=solver) for k, v in curve.items()
         }
@@ -383,22 +434,93 @@ def _parse_curve_or_id_from_solver_(curve: _BaseCurveOrId, solver: Solver) -> _B
                 raise ValueError("`curve` must be in `solver`.")
 
 
-# Solver and Vol mapping
+# Solver and FX Vol mapping
 
 
-def _maybe_get_fx_vol_maybe_from_solver(
-    vol_meta: _Vol,
+@overload
+def _get_fx_vol(
+    allow_numeric: Literal[True],
+    allow_no_input: Literal[True],
     vol: _Vol,
-    # name: str, = "fx_vol"
+    vol_meta: _Vol,
     solver: Solver_,
-) -> _FXVolOption_:
+) -> _FXVolObj | DualTypes | NoInput: ...
+
+
+@overload
+def _get_fx_vol(
+    allow_numeric: Literal[True],
+    allow_no_input: Literal[False],
+    vol: _Vol,
+    vol_meta: _Vol,
+    solver: Solver_,
+) -> _FXVolObj | DualTypes: ...
+
+
+@overload
+def _get_fx_vol(
+    allow_numeric: Literal[False],
+    allow_no_input: Literal[True],
+    vol: _Vol,
+    vol_meta: _Vol,
+    solver: Solver_,
+) -> _FXVolObj | NoInput: ...
+
+
+@overload
+def _get_fx_vol(
+    allow_numeric: Literal[False],
+    allow_no_input: Literal[False],
+    vol: _Vol,
+    vol_meta: _Vol,
+    solver: Solver_,
+) -> _FXVolObj: ...
+
+
+def _get_fx_vol(
+    allow_numeric: bool,
+    allow_no_input: bool,
+    vol: _Vol,
+    vol_meta: _Vol,
+    solver: Solver_,
+) -> _FXVolObj | DualTypes | NoInput:
     fx_vol_ = _drb(vol_meta.fx_vol, vol.fx_vol)
-    if isinstance(fx_vol_, NoInput | float | Dual | Dual2 | Variable):
-        return fx_vol_
+    if isinstance(fx_vol_, NoInput) or fx_vol_ is None:
+        if allow_no_input:
+            return NoInput(0)
+        else:
+            raise ValueError("`fx_vol` must be provided. Got NoInput.")
+    elif isinstance(fx_vol_, float | Dual | Dual2 | Variable):
+        if allow_numeric:
+            return fx_vol_
+        else:
+            raise ValueError("`fx_vol` must be an object. Got numeric quantity.")
     elif isinstance(solver, NoInput):
-        return _validate_fx_vol_is_not_id(fx_vol=fx_vol_)
+        return _validate_base_fx_vol(fx_vol=fx_vol_, allow_no_input=allow_no_input)  # type: ignore[no-any-return, call-overload]
     else:
         return _get_fx_vol_from_solver(fx_vol=fx_vol_, solver=solver)
+
+
+@overload
+def _validate_base_fx_vol(fx_vol: _FXVolObj | str, allow_no_input: Literal[False]) -> _FXVolObj: ...
+
+
+@overload
+def _validate_base_fx_vol(
+    fx_vol: _FXVolObj | str, allow_no_input: Literal[True]
+) -> _FXVolObj | NoInput: ...
+
+
+def _validate_base_fx_vol(fx_vol: _FXVolObj | str, allow_no_input: bool) -> _FXVolObj | NoInput:
+    if isinstance(fx_vol, str):
+        if allow_no_input:
+            return NoInput(0)
+        else:
+            raise ValueError(
+                f"`fx_vol` must contain FXVol object, not str, if `solver` not given. "
+                f"Got id: '{fx_vol}'"
+            )
+    return fx_vol
 
 
 def _get_fx_vol_from_solver(fx_vol: _FXVolObj | str, solver: Solver) -> _FXVolObj:
@@ -439,12 +561,70 @@ def _get_fx_vol_from_solver(fx_vol: _FXVolObj | str, solver: Solver) -> _FXVolOb
             raise ValueError("FXVol object must be in `solver`.")
 
 
-def _validate_fx_vol_is_not_id(fx_vol: _FXVolObj | str) -> _FXVolObj:
-    if isinstance(fx_vol, str):  # curve is a str ID
-        raise ValueError(
-            f"`vol` must contain FXVol object, not str, if `solver` not given. Got id: '{fx_vol}'"
+# Solver and IR Vol mapping
+
+
+def _maybe_get_ir_vol_maybe_from_solver(
+    vol_meta: _Vol,
+    vol: _Vol,
+    # name: str, = "fx_vol"
+    solver: Solver_,
+) -> _IRVolOption_:
+    ir_vol_ = _drb(vol_meta.ir_vol, vol.ir_vol)
+    if isinstance(ir_vol_, NoInput | float | Dual | Dual2 | Variable):
+        return ir_vol_
+    elif isinstance(solver, NoInput):
+        return _validate_ir_vol_is_not_id(ir_vol=ir_vol_)
+    else:
+        return _get_ir_vol_from_solver(ir_vol=ir_vol_, solver=solver)
+
+
+def _get_ir_vol_from_solver(
+    ir_vol: _BaseIRSmile | _BaseIRCube[Any] | str, solver: Solver
+) -> _BaseIRSmile | _BaseIRCube[Any]:
+    if isinstance(ir_vol, str):
+        return solver._get_pre_irvol(ir_vol)
+
+    try:
+        # it is a safeguard to load curves from solvers when a solver is
+        # provided and multiple curves might have the same id
+        __: _IRVolObj = solver._get_pre_irvol(ir_vol.id)
+        if id(__) != id(ir_vol):  # Python id() is a memory id, not a string label id.
+            raise ValueError(
+                "An IRVol object has been supplied, as part of ``vol``, which has the same "
+                f"`id` ('{ir_vol.id}'),\nas one of the curves available as part of the "
+                "Solver's collection but is not the same object.\n"
+                "This is ambiguous and cannot price.\n"
+                "Either refactor the arguments as follows:\n"
+                "1) remove the conflicting object: [vol=[..], solver=<Solver>] -> "
+                "[vol=None, solver=<Solver>]\n"
+                "2) change the `id` of the supplied IRVol object and ensure the rateslib.defaults "
+                "option 'curve_not_in_solver' is set to 'ignore'.\n"
+                "   This will remove the ability to accurately price risk metrics.",
+            )
+        return __
+    except AttributeError:
+        raise AttributeError(
+            "IRVol object has no attribute `id`, likely it is not a valid object, got: "
+            f"{ir_vol}.\nSince a solver is provided have you missed labelling the `curves` "
+            f"of the instrument or supplying `curves` directly?",
         )
-    return fx_vol
+    except KeyError:
+        if defaults.curve_not_in_solver == "ignore":
+            return ir_vol
+        elif defaults.curve_not_in_solver == "warn":
+            warnings.warn("FXVol object not found in `solver`.", UserWarning)
+            return ir_vol
+        else:
+            raise ValueError("FXVol object must be in `solver`.")
+
+
+def _validate_ir_vol_is_not_id(ir_vol: _IRVolObj | str) -> _IRVolObj:
+    if isinstance(ir_vol, str):  # curve is a str ID
+        raise ValueError(
+            f"`vol` must contain IRVol object, not str, if `solver` not given. Got id: '{ir_vol}'"
+        )
+    return ir_vol
 
 
 # FX and Solver mapping

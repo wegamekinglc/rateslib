@@ -20,15 +20,16 @@ from rateslib.instruments.protocols import _BaseInstrument
 from rateslib.instruments.protocols.kwargs import _convert_to_schedule_kwargs, _KWArgs
 from rateslib.instruments.protocols.pricing import (
     _Curves,
+    _get_curve,
     _get_fx_maybe_from_solver,
-    _maybe_get_curve_maybe_from_solver,
+    _parse_curves,
     _Vol,
 )
 from rateslib.legs import CreditPremiumLeg, CreditProtectionLeg
 from rateslib.scheduling import Frequency
 
 if TYPE_CHECKING:
-    from rateslib.typing import (  # pragma: no cover
+    from rateslib.local_types import (  # pragma: no cover
         CalInput,
         CurvesT_,
         DataFrame,
@@ -165,7 +166,6 @@ class CDS(_BaseInstrument):
     leg2_payment_lag: Adjuster, int, :green:`optional (inherited from leg1)`
     leg2_payment_lag_exchange: Adjuster, int, :green:`optional (inherited from leg1)`
     leg2_ex_div: Adjuster, int, :green:`optional (inherited from leg1)`
-    leg2_convention: str, :green:`optional (inherited from leg1)`
 
         .. note::
 
@@ -265,7 +265,7 @@ class CDS(_BaseInstrument):
         leg2_calendar: CalInput = NoInput(1),
         leg2_payment_lag: int_ = NoInput(1),
         leg2_payment_lag_exchange: int_ = NoInput(1),
-        leg2_convention: str_ = NoInput(1),
+        # leg2_convention: str_ = NoInput(1),
         leg2_ex_div: int_ = NoInput(1),
         # settlement
         notional: float_ = NoInput(0),
@@ -313,7 +313,7 @@ class CDS(_BaseInstrument):
             leg2_ex_div=leg2_ex_div,
             leg2_notional=leg2_notional,
             leg2_amortization=leg2_amortization,
-            leg2_convention=leg2_convention,
+            # leg2_convention=leg2_convention,
             # rate and credit
             premium_accrued=premium_accrued,
             fixed_rate=fixed_rate,
@@ -355,15 +355,11 @@ class CDS(_BaseInstrument):
         forward: datetime_ = NoInput(0),
         metric: str_ = NoInput(0),
     ) -> DualTypes:
-        _curves = self._parse_curves(curves)
+        c = _parse_curves(self, curves, solver)
 
         leg2_npv: DualTypes = self.leg2.local_npv(
-            rate_curve=_maybe_get_curve_maybe_from_solver(
-                self.kwargs.meta["curves"], _curves, "leg2_rate_curve", solver
-            ),
-            disc_curve=_maybe_get_curve_maybe_from_solver(
-                self.kwargs.meta["curves"], _curves, "leg2_disc_curve", solver
-            ),
+            rate_curve=_get_curve("leg2_rate_curve", True, True, *c),
+            disc_curve=_get_curve("leg2_disc_curve", False, True, *c),
             index_curve=NoInput(0),
             settlement=settlement,
             forward=forward,
@@ -371,12 +367,8 @@ class CDS(_BaseInstrument):
         return (
             self.leg1.spread(
                 target_npv=-leg2_npv,
-                rate_curve=_maybe_get_curve_maybe_from_solver(
-                    self.kwargs.meta["curves"], _curves, "rate_curve", solver
-                ),
-                disc_curve=_maybe_get_curve_maybe_from_solver(
-                    self.kwargs.meta["curves"], _curves, "disc_curve", solver
-                ),
+                rate_curve=_get_curve("rate_curve", True, True, *c),
+                disc_curve=_get_curve("disc_curve", False, True, *c),
                 index_curve=NoInput(0),
                 settlement=settlement,
                 forward=forward,
@@ -570,14 +562,11 @@ class CDS(_BaseInstrument):
         settlement: datetime_ = NoInput(0),
         forward: datetime_ = NoInput(0),
     ) -> DualTypes:
-        _curves = self._parse_curves(curves)
+        c = _parse_curves(self, curves, solver)
+
         return self.leg2.analytic_rec_risk(
-            rate_curve=_maybe_get_curve_maybe_from_solver(
-                self.kwargs.meta["curves"], _curves, "leg2_rate_curve", solver
-            ),
-            disc_curve=_maybe_get_curve_maybe_from_solver(
-                self.kwargs.meta["curves"], _curves, "leg2_disc_curve", solver
-            ),
+            rate_curve=_get_curve("leg2_rate_curve", False, True, *c),
+            disc_curve=_get_curve("leg2_disc_curve", False, True, *c),
             fx=_get_fx_maybe_from_solver(solver=solver, fx=fx),
             base=base,
         )

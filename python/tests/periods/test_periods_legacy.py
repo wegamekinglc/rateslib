@@ -27,11 +27,9 @@ from rateslib.data.fixings import FloatRateSeries, FXIndex
 from rateslib.data.loader import FixingMissingForecasterError
 from rateslib.default import NoInput, _drb
 from rateslib.dual import Dual, gradient
-from rateslib.enums import FloatFixingMethod
-from rateslib.enums.parameters import FXDeltaMethod, IndexMethod
+from rateslib.enums import Err, FloatFixingMethod, Ok, OptionPricingModel
+from rateslib.enums.parameters import FXDeltaMethod, IndexMethod, SpreadCompoundMethod
 from rateslib.fx import FXForwards, FXRates
-from rateslib.fx_volatility import FXDeltaVolSmile, FXSabrSmile, FXSabrSurface
-from rateslib.fx_volatility.utils import _d_plus_min_u
 from rateslib.periods import (
     Cashflow,
     CreditPremiumPeriod,
@@ -40,15 +38,23 @@ from rateslib.periods import (
     FloatPeriod,
     FXCallPeriod,
     FXPutPeriod,
-    # IndexCashflow,
-    # IndexFixedPeriod,
+    IRSCallPeriod,
+    IRSPutPeriod,
     MtmCashflow,
-    # NonDeliverableCashflow,
-    # NonDeliverableFixedPeriod,
     ZeroFixedPeriod,
 )
 from rateslib.periods.float_rate import rate_value
 from rateslib.scheduling import Cal, Frequency, RollDay, Schedule
+from rateslib.volatility import (
+    FXDeltaVolSmile,
+    FXSabrSmile,
+    FXSabrSurface,
+    IRSabrCube,
+    IRSabrSmile,
+    IRSplineCube,
+    IRSplineSmile,
+)
+from rateslib.volatility.utils import _OptionModelBlack76
 
 
 @pytest.fixture
@@ -315,14 +321,41 @@ class TestFloatPeriod:
                 float_spread=1,
             )
 
+    @pytest.mark.parametrize(
+        "scm",
+        [
+            SpreadCompoundMethod.ISDACompounding,
+            SpreadCompoundMethod.ISDAFlatCompounding,
+            SpreadCompoundMethod.NoneSimple,
+        ],
+    )
+    @pytest.mark.parametrize(
+        ("meth"),
+        [
+            FloatFixingMethod.RFRObservationShift(2),
+            FloatFixingMethod.RFRPaymentDelay(),
+            FloatFixingMethod.RFRLockout(2),
+            FloatFixingMethod.RFRLookback(2),
+        ],
+    )
+    def test_spread_compound_with_fixing_method_allowed(self, scm, meth):
+        FloatPeriod(
+            start=dt(2022, 1, 1),
+            end=dt(2022, 4, 1),
+            payment=dt(2022, 4, 1),
+            frequency="Q",
+            float_spread=1.0,
+            spread_compound_method=scm,
+            fixing_method=meth,
+        )
+
     def test_rfr_lockout_too_few_dates(self, curve) -> None:
         period = FloatPeriod(
             start=dt(2022, 1, 10),
             end=dt(2022, 1, 15),
             payment=dt(2022, 1, 15),
             frequency=Frequency.Months(1, None),
-            fixing_method="rfr_lockout",
-            method_param=6,
+            fixing_method="rfr_lockout(6)",
         )
         with pytest.raises(ValueError, match="The `method_param` for an RFR Lockout type `fixing_"):
             period.rate(curve)
@@ -350,18 +383,30 @@ class TestFloatPeriod:
         result = float_period.npv(rate_curve=curve)
         assert abs(result + 9997768.95848275) < 1e-7
 
-    def test_rfr_avg_method_raises(self, curve) -> None:
-        period = FloatPeriod(
-            start=dt(2022, 1, 1),
-            end=dt(2022, 1, 4),
-            payment=dt(2022, 1, 4),
-            frequency=Frequency.Months(3, None),
-            fixing_method="rfr_payment_delay_avg",
-            spread_compound_method="isda_compounding",
-        )
-        msg = "The `spread_compound_method` must be the 'NoneSimple' variant when using a `fixin"
+    @pytest.mark.parametrize(
+        "scm", [SpreadCompoundMethod.ISDACompounding, SpreadCompoundMethod.ISDAFlatCompounding]
+    )
+    @pytest.mark.parametrize(
+        "fm",
+        [
+            FloatFixingMethod.RFRObservationShiftAverage(2),
+            FloatFixingMethod.RFRPaymentDelayAverage(),
+            FloatFixingMethod.RFRLockoutAverage(2),
+            FloatFixingMethod.RFRLookbackAverage(2),
+            FloatFixingMethod.IBOR(2),
+        ],
+    )
+    def test_rfr_avg_method_raises(self, scm, fm, curve) -> None:
+        msg = "is not compatible"
         with pytest.raises(ValueError, match=msg):
-            period.rate(curve)
+            FloatPeriod(
+                start=dt(2022, 1, 1),
+                end=dt(2022, 1, 4),
+                payment=dt(2022, 1, 4),
+                frequency=Frequency.Months(3, None),
+                fixing_method=fm,
+                spread_compound_method=scm,
+            )
 
     @pytest.mark.parametrize("curve_type", ["curve", "line_curve"])
     def test_rfr_payment_delay_method(self, curve_type, rfr_curve, line_curve) -> None:
@@ -468,8 +513,7 @@ class TestFloatPeriod:
             end=dt(2022, 1, 4),
             payment=dt(2022, 1, 4),
             frequency=Frequency.Months(3, None),
-            fixing_method="rfr_lockout_avg",
-            method_param=2,
+            fixing_method="rfr_lockout_avg(2)",
             fixing_series=FloatRateSeries(
                 calendar="all",
                 lag=0,
@@ -488,8 +532,7 @@ class TestFloatPeriod:
             end=dt(2022, 1, 5),
             payment=dt(2022, 1, 5),
             frequency=Frequency.Months(3, None),
-            fixing_method="rfr_lockout_avg",
-            method_param=1,
+            fixing_method="rfr_lockout_avg(1)",
             fixing_series=FloatRateSeries(
                 calendar="all",
                 lag=0,
@@ -504,16 +547,16 @@ class TestFloatPeriod:
 
     @pytest.mark.parametrize("curve_type", ["curve", "line_curve"])
     def test_rfr_lockout_avg_method_with_fixings(self, curve_type, rfr_curve, line_curve) -> None:
+        name = str(hash(os.urandom(2)))
         curve = rfr_curve if curve_type == "curve" else line_curve
-        fixings.add("887762_1B", Series(index=[dt(2022, 1, 1), dt(2022, 1, 2)], data=[10.0, 8.0]))
+        fixings.add(f"{name}_1B", Series(index=[dt(2022, 1, 1), dt(2022, 1, 2)], data=[10.0, 8.0]))
         period = FloatPeriod(
             start=dt(2022, 1, 1),
             end=dt(2022, 1, 4),
             payment=dt(2022, 1, 4),
             frequency=Frequency.Months(3, None),
-            fixing_method="rfr_lockout_avg",
-            method_param=2,
-            rate_fixings="887762",
+            fixing_method="rfr_lockout_avg(2)",
+            rate_fixings=name,
             fixing_series=FloatRateSeries(
                 calendar="all",
                 lag=0,
@@ -531,9 +574,8 @@ class TestFloatPeriod:
             end=dt(2022, 1, 4),
             payment=dt(2022, 1, 1),
             frequency=Frequency.Months(3, None),
-            fixing_method="rfr_lockout_avg",
-            method_param=1,
-            rate_fixings="887762",
+            fixing_method="rfr_lockout_avg(1)",
+            rate_fixings=name,
             fixing_series=FloatRateSeries(
                 calendar="all",
                 lag=0,
@@ -545,7 +587,7 @@ class TestFloatPeriod:
         result = period.rate(rfr_curve)
         expected = (10.0 + 8.0 + 8.0) / 3
         assert abs(result - expected) < 1e-12
-        fixings.pop("887762_1B")
+        fixings.pop(f"{name}_1B")
 
     @pytest.mark.parametrize("curve_type", ["curve", "line_curve"])
     def test_rfr_lockout_method(self, curve_type, rfr_curve, line_curve) -> None:
@@ -555,8 +597,7 @@ class TestFloatPeriod:
             end=dt(2022, 1, 4),
             payment=dt(2022, 1, 4),
             frequency=Frequency.Months(3, None),
-            fixing_method="rfr_lockout",
-            method_param=2,
+            fixing_method="rfr_lockout(2)",
             fixing_series=FloatRateSeries(
                 calendar="all",
                 lag=0,
@@ -575,8 +616,7 @@ class TestFloatPeriod:
             end=dt(2022, 1, 5),
             payment=dt(2022, 1, 5),
             frequency=Frequency.Months(3, None),
-            fixing_method="rfr_lockout",
-            method_param=1,
+            fixing_method="rfr_lockout(1)",
             fixing_series=FloatRateSeries(
                 calendar="all",
                 lag=0,
@@ -598,8 +638,7 @@ class TestFloatPeriod:
             end=dt(2022, 1, 4),
             payment=dt(2022, 1, 4),
             frequency=Frequency.Months(3, None),
-            fixing_method="rfr_lockout",
-            method_param=2,
+            fixing_method="rfr_lockout(2)",
             rate_fixings="887762",
             fixing_series=FloatRateSeries(
                 calendar="all",
@@ -618,8 +657,7 @@ class TestFloatPeriod:
             end=dt(2022, 1, 4),
             payment=dt(2022, 1, 4),
             frequency=Frequency.Months(3, None),
-            fixing_method="rfr_lockout",
-            method_param=1,
+            fixing_method="rfr_lockout(1)",
             rate_fixings="887762",
             fixing_series=FloatRateSeries(
                 calendar="all",
@@ -642,8 +680,7 @@ class TestFloatPeriod:
             end=dt(2022, 1, 5),
             payment=dt(2022, 1, 5),
             frequency=Frequency.Months(3, None),
-            fixing_method="rfr_observation_shift",
-            method_param=1,
+            fixing_method="rfr_observation_shift(1)",
             fixing_series=FloatRateSeries(
                 calendar="all",
                 lag=0,
@@ -661,8 +698,7 @@ class TestFloatPeriod:
             end=dt(2022, 1, 5),
             payment=dt(2022, 1, 5),
             frequency=Frequency.Months(3, None),
-            fixing_method="rfr_observation_shift",
-            method_param=2,
+            fixing_method="rfr_observation_shift(2)",
             fixing_series=FloatRateSeries(
                 calendar="all",
                 lag=0,
@@ -690,8 +726,7 @@ class TestFloatPeriod:
             end=dt(2022, 1, 5),
             payment=dt(2022, 1, 5),
             frequency=Frequency.Months(3, None),
-            fixing_method="rfr_observation_shift",
-            method_param=1,
+            fixing_method="rfr_observation_shift(1)",
             rate_fixings=name,
             fixing_series=FloatRateSeries(
                 calendar="all",
@@ -710,8 +745,7 @@ class TestFloatPeriod:
             end=dt(2022, 1, 5),
             payment=dt(2022, 1, 5),
             frequency=Frequency.Months(3, None),
-            fixing_method="rfr_observation_shift",
-            method_param=2,
+            fixing_method="rfr_observation_shift(2)",
             rate_fixings=name,
             fixing_series=FloatRateSeries(
                 calendar="all",
@@ -741,8 +775,7 @@ class TestFloatPeriod:
             end=dt(2022, 1, 5),
             payment=dt(2022, 1, 5),
             frequency=Frequency.Months(3, None),
-            fixing_method="rfr_observation_shift",
-            method_param=2,
+            fixing_method="rfr_observation_shift(2)",
             rate_fixings=name,
             float_spread=1000.0,
             fixing_series=FloatRateSeries(
@@ -767,8 +800,7 @@ class TestFloatPeriod:
             end=dt(2022, 1, 5),
             payment=dt(2022, 1, 5),
             frequency=Frequency.Months(3, None),
-            fixing_method="rfr_observation_shift_avg",
-            method_param=1,
+            fixing_method="rfr_observation_shift_avg(1)",
             fixing_series=FloatRateSeries(
                 calendar="all",
                 lag=0,
@@ -786,8 +818,7 @@ class TestFloatPeriod:
             end=dt(2022, 1, 5),
             payment=dt(2022, 1, 5),
             frequency=Frequency.Months(3, None),
-            fixing_method="rfr_observation_shift_avg",
-            method_param=2,
+            fixing_method="rfr_observation_shift_avg(2)",
             fixing_series=FloatRateSeries(
                 calendar="all",
                 lag=0,
@@ -814,8 +845,7 @@ class TestFloatPeriod:
             end=dt(2022, 1, 5),
             payment=dt(2022, 1, 5),
             frequency=Frequency.Months(3, None),
-            fixing_method="rfr_observation_shift_avg",
-            method_param=1,
+            fixing_method="rfr_observation_shift_avg(1)",
             rate_fixings="123454",
             fixing_series=FloatRateSeries(
                 calendar="all",
@@ -834,8 +864,7 @@ class TestFloatPeriod:
             end=dt(2022, 1, 5),
             payment=dt(2022, 1, 5),
             frequency=Frequency.Months(3, None),
-            fixing_method="rfr_observation_shift_avg",
-            method_param=2,
+            fixing_method="rfr_observation_shift_avg(2)",
             rate_fixings="123454",
             fixing_series=FloatRateSeries(
                 calendar="all",
@@ -857,8 +886,7 @@ class TestFloatPeriod:
             end=dt(2022, 12, 31),
             payment=dt(2022, 12, 31),
             frequency=Frequency.Months(12, None),
-            fixing_method="rfr_lookback",
-            method_param=5,
+            fixing_method="rfr_lookback(5)",
             fixing_series=FloatRateSeries(
                 calendar="ldn",
                 lag=0,
@@ -882,9 +910,9 @@ class TestFloatPeriod:
         ("method", "expected", "expected_date"),
         [
             ("rfr_payment_delay", [1000000, 1000082, 1000191, 1000561], dt(2022, 1, 6)),
-            ("rfr_observation_shift", [1499240, 1499281, 1499363, 1499486], dt(2022, 1, 4)),
-            ("rfr_lockout", [999931, 4999411, 0, 0], dt(2022, 1, 6)),
-            ("rfr_lookback", [999657, 999685, 2998726, 999821], dt(2022, 1, 4)),
+            ("rfr_observation_shift(2)", [1499240, 1499281, 1499363, 1499486], dt(2022, 1, 4)),
+            ("rfr_lockout(2)", [999931, 4999411, 0, 0], dt(2022, 1, 6)),
+            ("rfr_lookback(2)", [999657, 999685, 2998726, 999821], dt(2022, 1, 4)),
         ],
     )
     def test_rfr_fixings_array(self, curve_type, method, expected, expected_date) -> None:
@@ -964,9 +992,9 @@ class TestFloatPeriod:
         ("method", "expected", "expected_date"),
         [
             ("rfr_payment_delay", [0.27393, 0.27392, 0.82155, 0.27391], dt(2022, 1, 6)),
-            ("rfr_observation_shift", [0.41074, 0.41073, 0.41072, 0.41071], dt(2022, 1, 4)),
-            ("rfr_lockout", [0.27391, 1.36933, 0, 0], dt(2022, 1, 6)),
-            ("rfr_lookback", [0.27387, 0.27386, 0.82143, 0.27385], dt(2022, 1, 4)),
+            ("rfr_observation_shift(2)", [0.41074, 0.41073, 0.41072, 0.41071], dt(2022, 1, 4)),
+            ("rfr_lockout(2)", [0.27391, 1.36933, 0, 0], dt(2022, 1, 6)),
+            ("rfr_lookback(2)", [0.27387, 0.27386, 0.82143, 0.27385], dt(2022, 1, 4)),
         ],
     )
     def test_rfr_fixings_array_substitute(
@@ -1036,11 +1064,8 @@ class TestFloatPeriod:
         table = period.local_analytic_rate_fixings(rate_curve=rfr_curve, disc_curve=curve)
 
         assert table.index.tolist()[1] == expected_date
-        assert np.all(
-            np.isclose(
-                np.array(expected), table[(rfr_curve.id, "usd", "usd", "1B")].to_numpy(), atol=1e-4
-            )
-        )
+        result = table[(rfr_curve.id, "usd", "usd", "1B")].to_numpy()
+        assert np.all(np.isclose(np.array(expected), result, atol=1e-4))
 
     def test_rfr_fixings_array_raises2(self, line_curve, curve) -> None:
         period = FloatPeriod(
@@ -1069,14 +1094,14 @@ class TestFloatPeriod:
 
     @pytest.mark.skip(reason="NOTIONAL mapping not implemented")
     @pytest.mark.parametrize(
-        ("method", "param", "expected"),
+        ("method", "expected"),
         [
-            ("rfr_payment_delay", 0, 1000000),
-            ("rfr_observation_shift", 1, 333319),
-            ("rfr_lookback", 1, 333319),
+            ("rfr_payment_delay", 1000000),
+            ("rfr_observation_shift(1)", 333319),
+            ("rfr_lookback(1)", 333319),
         ],
     )
-    def test_rfr_fixings_array_single_period(self, method, param, expected) -> None:
+    def test_rfr_fixings_array_single_period(self, method, expected) -> None:
         rfr_curve = Curve(
             nodes={dt(2022, 1, 3): 1.0, dt(2022, 1, 15): 0.9995},
             interpolation="log_linear",
@@ -1089,7 +1114,6 @@ class TestFloatPeriod:
             payment=dt(2022, 1, 11),
             frequency=Frequency.Months(3, None),
             fixing_method=method,
-            method_param=param,
             notional=-1000000,
             convention="act365f",
             fixing_series=FloatRateSeries(
@@ -1104,14 +1128,14 @@ class TestFloatPeriod:
         assert abs(result[(rfr_curve.id, "notional")].iloc[0] - expected) < 1
 
     @pytest.mark.parametrize(
-        ("method", "param", "expected"),
+        ("method", "expected"),
         [
-            ("rfr_payment_delay", 0, 0.27388),
-            ("rfr_observation_shift", 1, 0.27388),
-            ("rfr_lookback", 1, 0.27388),
+            ("rfr_payment_delay", 0.27388),
+            ("rfr_observation_shift(1)", 0.27388),
+            ("rfr_lookback(1)", 0.27388),
         ],
     )
-    def test_rfr_fixings_array_single_period_substitute(self, method, param, expected) -> None:
+    def test_rfr_fixings_array_single_period_substitute(self, method, expected) -> None:
         rfr_curve = Curve(
             nodes={dt(2022, 1, 3): 1.0, dt(2022, 1, 15): 0.9995},
             interpolation="log_linear",
@@ -1124,7 +1148,6 @@ class TestFloatPeriod:
             payment=dt(2022, 1, 11),
             frequency=Frequency.Months(3, None),
             fixing_method=method,
-            method_param=param,
             notional=-1000000,
             convention="act365f",
             fixing_series=FloatRateSeries(
@@ -1139,43 +1162,41 @@ class TestFloatPeriod:
         assert abs(result[(rfr_curve.id, "usd", "usd", "1B")].iloc[0] - expected) < 1
 
     @pytest.mark.parametrize(
-        ("method", "param", "expected", "index"),
+        ("method", "expected", "index"),
         [
             (
                 "rfr_payment_delay",
-                0,
                 3.20040557,
                 [dt(2022, 1, 28), dt(2022, 1, 31), dt(2022, 2, 1)],
             ),
-            ("rfr_lockout", 1, 3.80063892, [dt(2022, 1, 28), dt(2022, 1, 31), dt(2022, 2, 1)]),
-            ("rfr_lookback", 1, 3.20040557, [dt(2022, 1, 27), dt(2022, 1, 28), dt(2022, 1, 31)]),
+            ("rfr_lockout(1)", 3.80063892, [dt(2022, 1, 28), dt(2022, 1, 31), dt(2022, 2, 1)]),
+            ("rfr_lookback(1)", 3.20040557, [dt(2022, 1, 27), dt(2022, 1, 28), dt(2022, 1, 31)]),
             (
-                "rfr_observation_shift",
-                1,
+                "rfr_observation_shift(1)",
                 4.00045001,
                 [dt(2022, 1, 27), dt(2022, 1, 28), dt(2022, 1, 31)],
             ),
         ],
     )
-    def test_rfr_period_all_types_with_defined_fixings(self, method, param, expected, index):
+    def test_rfr_period_all_types_with_defined_fixings(self, method, expected, index):
         # This is probably a redundant test but it came later after some refactoring and
         # was double checked with manual calculation in Excel. Easy to do.
         curve = Curve({dt(2022, 1, 1): 1.0, dt(2022, 3, 1): 1.0}, calendar="nyc")
-        fixings.add("887654_1B", Series(data=[3.0, 5.0, 2.0], index=index))
+        name = str(hash(os.urandom(2)))
+        fixings.add(f"{name}_1B", Series(data=[3.0, 5.0, 2.0], index=index))
         period = FloatPeriod(
             start=dt(2022, 1, 28),
             end=dt(2022, 2, 2),
             frequency=Frequency.Months(12, None),
             payment=dt(2022, 1, 1),
             fixing_method=method,
-            method_param=param,
             convention="act360",
             calendar="nyc",
-            rate_fixings="887654",
+            rate_fixings=name,
         )
         result = period.rate(curve)
         assert abs(result - expected) < 1e-8
-        fixings.pop("887654_1B")
+        fixings.pop(f"{name}_1B")
 
     @pytest.mark.parametrize(
         ("method", "expected"),
@@ -1211,8 +1232,7 @@ class TestFloatPeriod:
             end=dt(2022, 4, 5),
             payment=dt(2022, 4, 5),
             frequency=Frequency.Months(3, None),
-            fixing_method="ibor",
-            method_param=2,
+            fixing_method="ibor(2)",
             fixing_series=FloatRateSeries(
                 lag=2,
                 calendar="all",
@@ -1231,8 +1251,7 @@ class TestFloatPeriod:
             end=dt(2022, 4, 4),
             payment=dt(2022, 4, 4),
             frequency=Frequency.Months(3, None),
-            fixing_method="ibor",
-            method_param=2,
+            fixing_method="ibor(2)",
             convention="act365f",
             fixing_series=FloatRateSeries(
                 calendar="all",
@@ -1270,8 +1289,7 @@ class TestFloatPeriod:
             end=dt(2022, 4, 4),
             payment=dt(2022, 4, 4),
             frequency=Frequency.Months(3, None),
-            fixing_method="ibor",
-            method_param=2,
+            fixing_method="ibor(2)",
             convention="act365f",
             fixing_series=FloatRateSeries(
                 calendar="all",
@@ -1291,8 +1309,7 @@ class TestFloatPeriod:
             end=dt(2022, 4, 4),
             payment=dt(2022, 4, 4),
             frequency=Frequency.Months(3, None),
-            fixing_method="ibor",
-            method_param=2,
+            fixing_method="ibor(2)",
             convention="act365f",
             fixing_series=FloatRateSeries(
                 calendar="all",
@@ -1370,8 +1387,7 @@ class TestFloatPeriod:
             end=dt(2023, 6, 6),
             payment=dt(2023, 6, 6),
             frequency=Frequency.Months(3, None),
-            fixing_method="ibor",
-            method_param=2,
+            fixing_method="ibor(2)",
             rate_fixings="TEST_VALUES",
             fixing_series=FloatRateSeries(
                 calendar="bus",
@@ -1395,8 +1411,7 @@ class TestFloatPeriod:
             end=dt(2000, 5, 2),
             payment=dt(2000, 5, 2),
             frequency=Frequency.Months(3, None),
-            fixing_method="ibor",
-            method_param=0,
+            fixing_method="ibor(0)",
             fixing_series=FloatRateSeries(
                 calendar="bus",
                 convention="act360",
@@ -1429,8 +1444,7 @@ class TestFloatPeriod:
             end=dt(2000, 5, 2),
             payment=dt(2000, 5, 2),
             frequency=Frequency.Months(3, None),
-            fixing_method="ibor",
-            method_param=0,
+            fixing_method="ibor(0)",
             fixing_series=FloatRateSeries(
                 calendar="bus",
                 convention="act360",
@@ -1461,7 +1475,6 @@ class TestFloatPeriod:
             payment=dt(2022, 1, 4),
             frequency=Frequency.Months(3, None),
             fixing_method="rfr_payment_delay",
-            method_param=0,
             fixing_series=FloatRateSeries(
                 calendar="bus",
                 convention="act360",
@@ -1482,7 +1495,6 @@ class TestFloatPeriod:
             payment=dt(2022, 1, 4),
             frequency=Frequency.Months(3, None),
             fixing_method="rfr_payment_delay",
-            method_param=0,
             fixing_series=FloatRateSeries(
                 calendar="bus",
                 convention="act360",
@@ -1507,7 +1519,6 @@ class TestFloatPeriod:
             payment=dt(2022, 1, 4),
             frequency=Frequency.Months(3, None),
             fixing_method="rfr_payment_delay",
-            method_param=0,
             fixing_series=FloatRateSeries(
                 calendar="bus",
                 convention="act360",
@@ -1528,7 +1539,6 @@ class TestFloatPeriod:
             payment=dt(2022, 1, 4),
             frequency=Frequency.Months(3, None),
             fixing_method="rfr_payment_delay",
-            method_param=0,
             fixing_series=FloatRateSeries(
                 calendar="bus",
                 convention="act360",
@@ -1554,8 +1564,7 @@ class TestFloatPeriod:
             end=dt(2023, 6, 20),
             payment=dt(2023, 6, 20),
             frequency=Frequency.Months(3, None),
-            fixing_method="ibor",
-            method_param=2,
+            fixing_method="ibor(2)",
             calendar="bus",
             rate_fixings=name,
         )
@@ -1572,8 +1581,7 @@ class TestFloatPeriod:
             end=dt(2023, 6, 20),
             payment=dt(2023, 6, 20),
             frequency=Frequency.Months(3, None),
-            fixing_method="ibor",
-            method_param=2,
+            fixing_method="ibor(2)",
             calendar="bus",
             rate_fixings=2.0,
         )
@@ -1587,12 +1595,12 @@ class TestFloatPeriod:
             end=dt(2022, 7, 1),
             payment=dt(2022, 7, 1),
             frequency=Frequency.Months(3, None),
-            fixing_method="ibor",
-            method_param=2,
+            fixing_method="ibor(2)",
             float_spread=float_spread,
         )
         expected = (0.99 / 0.98 - 1) * 36000 / 91 + float_spread / 100
-        assert period.rate(curve) == expected
+        result = period.rate(curve)
+        assert result == expected
 
     @pytest.mark.parametrize("float_spread", [0, 100])
     def test_ibor_rate_stub_df_curve(self, float_spread, curve) -> None:
@@ -1601,8 +1609,7 @@ class TestFloatPeriod:
             end=dt(2022, 5, 1),
             payment=dt(2022, 5, 1),
             frequency=Frequency.Months(3, None),
-            fixing_method="ibor",
-            method_param=2,
+            fixing_method="ibor(2)",
             stub=True,
             float_spread=float_spread,
         )
@@ -1615,8 +1622,7 @@ class TestFloatPeriod:
             end=dt(2022, 5, 1),
             payment=dt(2022, 5, 1),
             frequency=Frequency.Months(3, None),
-            fixing_method="ibor",
-            method_param=2,
+            fixing_method="ibor(2)",
             stub=True,
             float_spread=100,
             rate_fixings=7.5,
@@ -2151,21 +2157,20 @@ class TestFloatPeriod:
                 end=dt(2022, 4, 4),
                 payment=dt(2022, 4, 4),
                 frequency=Frequency.Months(3, None),
-                fixing_method="rfr_lockout",
-                method_param=0,
+                fixing_method="rfr_lockout(0)",
                 rate_fixings=[1.00],
             )
 
-        with pytest.raises(ValueError, match="`method_param` should not be used"):
-            FloatPeriod(
-                start=dt(2022, 1, 4),
-                end=dt(2022, 4, 4),
-                payment=dt(2022, 4, 4),
-                frequency=Frequency.Months(3, None),
-                fixing_method="rfr_payment_delay",
-                method_param=2,
-                rate_fixings=[1.00],
-            )
+        # test obsolete with FloatFixingMethod enum
+        # with pytest.raises(ValueError, match="`method_param` should not be used"):
+        #     FloatPeriod(
+        #         start=dt(2022, 1, 4),
+        #         end=dt(2022, 4, 4),
+        #         payment=dt(2022, 4, 4),
+        #         frequency=Frequency.Months(3, None),
+        #         fixing_method="rfr_payment_delay",
+        #         rate_fixings=[1.00],
+        #     )
 
     def test_analytic_delta_no_curve_raises(self) -> None:
         name = str(hash(os.urandom(9)))
@@ -2231,15 +2236,15 @@ class TestFloatPeriod:
         assert abs(result - expected) < 1e-5
 
     @pytest.mark.parametrize(
-        ("meth", "param", "exp"),
+        ("meth", "exp"),
         [
-            ("rfr_payment_delay", NoInput(0), 3.1183733605),
-            ("rfr_observation_shift", 2, 3.085000395),
-            ("rfr_lookback", 2, 3.05163645),
-            ("rfr_lockout", 7, 3.00157855),
+            ("rfr_payment_delay", 3.1183733605),
+            ("rfr_observation_shift(2)", 3.085000395),
+            ("rfr_lookback(2)", 3.05163645),
+            ("rfr_lockout(7)", 3.00157855),
         ],
     )
-    def test_norges_bank_nowa_calc_same(self, meth, param, exp) -> None:
+    def test_norges_bank_nowa_calc_same(self, meth, exp) -> None:
         # https://app.norges-bank.no/nowa/#/en/
         curve = Curve({dt(2023, 8, 4): 1.0}, calendar="osl", convention="act365f")
         fixings.add("nowa_1B", fixings["nowa"][1])
@@ -2249,7 +2254,6 @@ class TestFloatPeriod:
             payment=dt(2023, 5, 16),
             frequency=Frequency.Months(12, None),
             fixing_method=meth,
-            method_param=param,
             float_spread=0.0,
             rate_fixings="nowa",
             fixing_series=FloatRateSeries(
@@ -2270,8 +2274,7 @@ class TestFloatPeriod:
             end=dt(2023, 6, 12),
             payment=dt(2023, 6, 16),
             frequency=Frequency.Months(12, None),
-            fixing_method="ibor",
-            method_param=1,
+            fixing_method="ibor(1)",
             float_spread=0.0,
             stub=True,
         )
@@ -2287,8 +2290,7 @@ class TestFloatPeriod:
             end=dt(2023, 4, 1),
             payment=dt(2023, 4, 1),
             frequency=Frequency.Months(12, None),
-            fixing_method="ibor",
-            method_param=1,
+            fixing_method="ibor(1)",
             float_spread=0.0,
             stub=True,
         )
@@ -2306,8 +2308,7 @@ class TestFloatPeriod:
             end=dt(2023, 4, 1),
             payment=dt(2023, 4, 1),
             frequency=Frequency.Months(12, None),
-            fixing_method="ibor",
-            method_param=1,
+            fixing_method="ibor(1)",
             float_spread=0.0,
             stub=True,
         )
@@ -2401,8 +2402,7 @@ class TestFloatPeriod:
             frequency="Q",
             calendar="tgt",
             convention="act360",
-            fixing_method="ibor",
-            method_param=2,
+            fixing_method="ibor(2)",
             notional=-1e6,
             stub=True,
         )
@@ -2419,8 +2419,7 @@ class TestFloatPeriod:
             end=dt(2023, 4, 1),
             payment=dt(2023, 4, 1),
             frequency=Frequency.Months(12, None),
-            fixing_method="ibor",
-            method_param=1,
+            fixing_method="ibor(1)",
             float_spread=0.0,
             stub=True,
             fixing_series=FloatRateSeries(
@@ -2445,8 +2444,7 @@ class TestFloatPeriod:
             end=dt(2023, 4, 1),
             payment=dt(2023, 4, 1),
             frequency=Frequency.Months(12, None),
-            fixing_method="ibor",
-            method_param=1,
+            fixing_method="ibor(1)",
             float_spread=0.0,
             stub=True,
             fixing_series=FloatRateSeries(
@@ -2496,8 +2494,7 @@ class TestFloatPeriod:
             end=dt(2023, 4, 1),
             payment=dt(2023, 4, 1),
             frequency=Frequency.Months(12, None),
-            fixing_method="ibor",
-            method_param=1,
+            fixing_method="ibor(1)",
             float_spread=0.0,
             stub=True,
             fixing_series=FloatRateSeries(
@@ -2540,8 +2537,7 @@ class TestFloatPeriod:
             end=dt(2023, 5, 1),
             payment=dt(2023, 5, 1),
             frequency=Frequency.Months(3, None),
-            fixing_method="ibor",
-            method_param=1,
+            fixing_method="ibor(1)",
             float_spread=0.0,
         )
         curve3 = LineCurve({dt(2022, 1, 1): 3.0, dt(2023, 2, 1): 3.0})
@@ -2568,8 +2564,7 @@ class TestFloatPeriod:
             end=dt(2023, 6, 6),
             payment=dt(2023, 6, 6),
             frequency=Frequency.Months(3, None),
-            fixing_method="ibor",
-            method_param=2,
+            fixing_method="ibor(2)",
             fixing_series=FloatRateSeries(
                 calendar="bus",
                 convention="act360",
@@ -2597,7 +2592,7 @@ class TestFloatPeriod:
     @pytest.mark.parametrize(
         "curve", [NoInput(0), LineCurve({dt(2000, 1, 1): 2.0, dt(2001, 1, 1): 2.0})]
     )
-    @pytest.mark.parametrize("fixing_method", ["ibor", "rfr_payment_delay_avg"])
+    @pytest.mark.parametrize("fixing_method", ["ibor(2)", "rfr_payment_delay_avg"])
     @pytest.mark.parametrize("fixings", [3.0, NoInput(0)])
     def test_rate_optional_curve(self, fixings, fixing_method, curve) -> None:
         # GH530. Allow forecasting rates without necessarily providing curve if unnecessary
@@ -2609,13 +2604,19 @@ class TestFloatPeriod:
             rate_fixings=fixings,
             payment=dt(2000, 4, 12),
         )
-        if isinstance(curve, NoInput) and isinstance(fixings, NoInput) and fixing_method != "ibor":
+        if (
+            isinstance(curve, NoInput)
+            and isinstance(fixings, NoInput)
+            and fixing_method != "ibor(2)"
+        ):
             # then no data to price
             msg = "A `rate_curve` is required to forecast missing RFR"
             with pytest.raises(FixingMissingForecasterError, match=msg):
                 period.rate(curve)
         elif (
-            isinstance(curve, NoInput) and isinstance(fixings, NoInput) and fixing_method == "ibor"
+            isinstance(curve, NoInput)
+            and isinstance(fixings, NoInput)
+            and fixing_method == "ibor(2)"
         ):
             msg = "A `rate_curve` is required to forecast missing IBOR"
             with pytest.raises(ValueError, match=msg):
@@ -2697,8 +2698,7 @@ class TestFloatPeriod:
             end=dt(2024, 6, 20),
             payment=dt(2024, 6, 21),
             frequency="A",
-            fixing_method=FloatFixingMethod.RFRLockout,
-            method_param=4,
+            fixing_method=FloatFixingMethod.RFRLockout(4),
             fixing_series=FloatRateSeries(
                 calendar="bus", convention="act360", lag=0, eom=False, modifier="F"
             ),
@@ -2731,8 +2731,7 @@ class TestFloatPeriod:
             end=dt(2024, 6, 20),
             payment=dt(2024, 6, 21),
             frequency="A",
-            fixing_method=FloatFixingMethod.RFRLockout,
-            method_param=4,
+            fixing_method=FloatFixingMethod.RFRLockout(4),
             fixing_series=FloatRateSeries(
                 calendar="bus", convention="act360", lag=0, eom=False, modifier="F"
             ),
@@ -2742,6 +2741,19 @@ class TestFloatPeriod:
         assert p.try_unindexed_reference_cashflow_analytic_delta(
             rate_curve=NoInput(0), disc_curve=curve
         ).is_err
+
+    def test_ibor_param_mismatch(self):
+        with pytest.raises(
+            ValueError, match="A `fixing_series` has been provided with a publication `lag` that"
+        ):
+            FloatPeriod(
+                start=dt(2000, 1, 1),
+                end=dt(2000, 4, 1),
+                payment=dt(2000, 4, 1),
+                fixing_method="ibor(1)",
+                fixing_series="eur_ibor",
+                frequency="Q",
+            )
 
 
 class TestFixedPeriod:
@@ -3211,7 +3223,7 @@ class TestCreditProtectionPeriod:
             end=dt(2022, 4, 1),
             payment=dt(2022, 4, 3),
             notional=1e9,
-            convention="Act360",
+            # convention="Act360",
             termination=dt(2022, 4, 1),
             frequency=Frequency.Months(3, None),
             currency="usd",
@@ -3237,7 +3249,7 @@ class TestCreditProtectionPeriod:
             end=dt(2022, 4, 1),
             payment=dt(2022, 4, 3),
             notional=1e9,
-            convention="Act360",
+            # convention="Act360",
             termination=dt(2022, 4, 1),
             frequency=Frequency.Months(3, None),
             currency="usd",
@@ -3259,7 +3271,7 @@ class TestCreditProtectionPeriod:
             end=dt(2022, 4, 1),
             payment=dt(2022, 4, 3),
             notional=1e9,
-            convention="Act360",
+            # convention="Act360",
             termination=dt(2022, 4, 1),
             frequency=Frequency.Months(3, None),
             currency="usd",
@@ -3278,7 +3290,7 @@ class TestCreditProtectionPeriod:
             end=dt(2022, 4, 1),
             payment=dt(2022, 4, 3),
             notional=1e9,
-            convention="Act360",
+            # convention="Act360",
             termination=dt(2022, 4, 1),
             frequency=Frequency.Months(3, None),
             currency="usd",
@@ -3294,7 +3306,7 @@ class TestCreditProtectionPeriod:
             end=dt(2022, 4, 1),
             payment=dt(2022, 4, 3),
             notional=1e9,
-            convention="Act360",
+            # convention="Act360",
             termination=dt(2022, 4, 1),
             frequency=Frequency.Months(3, None),
             currency="usd",
@@ -3309,7 +3321,7 @@ class TestCreditProtectionPeriod:
             defaults.headers["payment"]: dt(2022, 4, 3),
             defaults.headers["notional"]: 1e9,
             defaults.headers["currency"]: "USD",
-            defaults.headers["convention"]: "Act360",
+            defaults.headers["convention"]: "One",
             defaults.headers["dcf"]: period.period_params.dcf,
             defaults.headers["df"]: 0.9897791268897856,
             defaults.headers["recovery"]: 0.4,
@@ -3333,7 +3345,7 @@ class TestCreditProtectionPeriod:
             end=dt(2022, 4, 1),
             payment=dt(2022, 4, 3),
             notional=1e9,
-            convention="Act360",
+            # convention="Act360",
             termination=dt(2022, 4, 1),
             frequency=Frequency.Months(3, None),
             currency="usd",
@@ -3348,7 +3360,7 @@ class TestCreditProtectionPeriod:
             defaults.headers["payment"]: dt(2022, 4, 3),
             defaults.headers["notional"]: 1e9,
             defaults.headers["currency"]: "USD",
-            defaults.headers["convention"]: "Act360",
+            defaults.headers["convention"]: "One",
             defaults.headers["dcf"]: period.period_params.dcf,
             defaults.headers["df"]: None,
             defaults.headers["recovery"]: None,
@@ -5331,7 +5343,7 @@ class TestFXOption:
             delta_type="spot_pa",
         )
 
-        d_eta = _d_plus_min_u(1.10 / 1.065, 0.10 * 0.5, -0.5)
+        d_eta = _OptionModelBlack76._d_plus_min_u(1.10 / 1.065, 0.10 * 0.5, -0.5)
         result = fxc._analytic_kega(1.10 / 1.065, 0.99, -0.5, 0.10, 0.50, 1.065, 1.0, 1.10, d_eta)
         expected = 0.355964619118249
         assert abs(result - expected) < 1e-12
@@ -5783,3 +5795,588 @@ class TestFXOption:
         )
         cf = fxo.cashflows()
         assert isinstance(cf, dict)
+
+
+class TestIROption:
+    @pytest.mark.parametrize("today", [dt(2026, 1, 3), dt(2026, 4, 15)])
+    @pytest.mark.parametrize(
+        ("strike", "fixing", "klass"), [(2.0, 2.5, IRSCallPeriod), (2.0, 1.5, IRSPutPeriod)]
+    )
+    def test_cashflow_known_exercise(self, today, strike, fixing, klass):
+        # if we know that the exercise will occur (from the fixing_value) value the cashflow
+        curve = Curve({today: 1.0, dt(2028, 4, 15): 0.95}, calendar="nyc")
+        ir_period = klass(
+            expiry=dt(2027, 2, 3),
+            irs_series="usd_irs",
+            tenor="6m",
+            strike=strike,
+            notional=100e6,
+            option_fixings=fixing,
+        )
+        immediate_npv = ir_period.ir_option_params.option_fixing.irs.npv(curves=curve)
+        forward_npv = immediate_npv / curve[dt(2027, 2, 5)] * 100.0
+
+        result = ir_period.unindexed_reference_cashflow(rate_curve=curve, index_curve=curve)
+        assert abs(abs(result) - abs(forward_npv)) < 1e-8
+
+    def test_cashflow_option_value(self):
+        # if we know that the exercise will occur (from the fixing_value) value the cashflow
+        curve = Curve(
+            nodes={dt(2026, 2, 16): 1.0, dt(2028, 2, 16): 0.941024343401225}, calendar="tgt"
+        )
+        ir_period = IRSCallPeriod(
+            expiry=dt(2027, 2, 16),
+            irs_series="usd_irs",
+            tenor="6m",
+            strike=3.020383,
+            notional=100e6,
+        )
+        cashflow = ir_period.unindexed_reference_cashflow(
+            rate_curve=curve, ir_vol=25.16, index_curve=curve
+        )
+        expected = cashflow * curve[dt(2027, 2, 18)]
+        result = ir_period.npv(rate_curve=curve, ir_vol=25.16, index_curve=curve)
+        assert abs(result - expected) < 1e-8
+        assert abs(result - 145000) < 500.0
+
+    def test_option_npv_different_csa(self):
+        # test that a forward NPV alignbed with cashflow does not change, but an NPV does.
+        curve = Curve(
+            nodes={dt(2026, 2, 16): 1.0, dt(2028, 2, 16): 0.941024343401225}, calendar="tgt"
+        )
+        alt_disc_curve = Curve(nodes={dt(2026, 2, 16): 1.0, dt(2028, 2, 16): 0.91}, calendar="tgt")
+        ir_period = IRSCallPeriod(
+            expiry=dt(2027, 2, 16),
+            irs_series="usd_irs",
+            tenor="6m",
+            strike=3.000,
+            notional=100e6,
+        )
+        fwd_result = ir_period.npv(
+            rate_curve=curve,
+            ir_vol=25.16,
+            index_curve=curve,
+            disc_curve=alt_disc_curve,
+            forward=dt(2027, 2, 18),
+        )
+        imm_exp = fwd_result * alt_disc_curve[dt(2027, 2, 18)]
+        imm_res = ir_period.npv(
+            rate_curve=curve, ir_vol=25.16, index_curve=curve, disc_curve=alt_disc_curve
+        )
+        assert abs(imm_exp - imm_res) < 1e-6
+
+        fwd_result2 = ir_period.npv(
+            rate_curve=curve, ir_vol=25.16, index_curve=curve, forward=dt(2027, 2, 18)
+        )
+        imm_exp2 = fwd_result * curve[dt(2027, 2, 18)]
+        imm_res2 = ir_period.npv(rate_curve=curve, ir_vol=25.16, index_curve=curve)
+        assert abs(imm_exp2 - imm_res2) < 1e-6
+
+        assert abs(fwd_result - fwd_result2) < 1e-6
+        assert abs(imm_res - imm_res2) > 2000.0
+
+    @pytest.mark.parametrize(
+        ("metric", "expected"),
+        [
+            ("NormalVol", 75.792872),
+            ("Premium", 149725.796514),
+            ("PercentNotional", 0.149725),
+            ("black_vol_shift_0", 25.16),
+            ("Black_vol_shift_100", 18.880156),
+            ("Black_vol_shift_200", 15.111396),
+            ("Black_vol_shift_300", 12.597702),
+            ("Black_vol_shift_117", 18.112063),
+        ],
+    )
+    def test_option_rate(self, metric, expected):
+        # if we know that the exercise will occur (from the fixing_value) value the cashflow
+        curve = Curve(
+            nodes={dt(2026, 2, 16): 1.0, dt(2028, 2, 16): 0.941024343401225}, calendar="nyc"
+        )
+        ir_period = IRSCallPeriod(
+            expiry=dt(2027, 2, 16),
+            irs_series="usd_irs",
+            tenor="6m",
+            strike=3.020383,
+            notional=100e6,
+        )
+        result = ir_period.rate(
+            rate_curve=curve,
+            disc_curve=curve,
+            index_curve=curve,
+            ir_vol=25.16,
+            metric=metric,
+        )
+        assert abs(result - expected) < 1e-5
+
+    @pytest.mark.parametrize(
+        ("smile", "expected"),
+        [
+            (
+                IRSabrSmile(
+                    eval_date=dt(2026, 2, 16),
+                    expiry=dt(2027, 2, 16),
+                    tenor="6m",
+                    beta=0.5,
+                    nodes={"alpha": 0.4, "rho": -0.05, "nu": 0.4},
+                    irs_series="usd_irs",
+                ),
+                70.27947168577464,
+            ),
+            (
+                IRSabrSmile(
+                    eval_date=dt(2026, 2, 16),
+                    expiry=dt(2027, 2, 16),
+                    tenor="6m",
+                    beta=0.5,
+                    nodes={"alpha": 0.4, "rho": -0.05, "nu": 0.4},
+                    irs_series="usd_irs",
+                    shift=200.0,
+                ),
+                90.68148269529259,
+            ),
+            (
+                IRSabrSmile(
+                    eval_date=dt(2026, 2, 16),
+                    expiry=dt(2027, 2, 16),
+                    tenor="6m",
+                    beta=0.5,
+                    nodes={"alpha": 0.3, "rho": -0.05, "nu": 0.4},
+                    irs_series="usd_irs",
+                    shift=50.0,
+                ),
+                56.96593721292377,
+            ),
+        ],
+    )
+    def test_ir_option_rate_from_sabr(self, smile, expected):
+        curve = Curve(
+            nodes={dt(2026, 2, 16): 1.0, dt(2028, 2, 16): 0.941024343401225}, calendar="nyc"
+        )
+        ir_period = IRSCallPeriod(
+            expiry=dt(2027, 2, 16),
+            irs_series="usd_irs",
+            tenor="6m",
+            strike=3.020383,
+            notional=100e6,
+        )
+        result = ir_period.rate(
+            rate_curve=curve,
+            disc_curve=curve,
+            index_curve=curve,
+            ir_vol=smile,
+            metric="normal_vol",
+        )
+        assert abs(result - expected) < 1e-5
+
+    def test_cashflows(self):
+        curve = Curve(
+            nodes={dt(2026, 2, 16): 1.0, dt(2028, 2, 16): 0.941024343401225}, calendar="nyc"
+        )
+        ir_period = IRSCallPeriod(
+            expiry=dt(2027, 2, 16),
+            irs_series="usd_irs",
+            tenor="6m",
+            strike=3.020383,
+            notional=100e6,
+        )
+        result = ir_period.cashflows(
+            rate_curve=curve,
+            disc_curve=curve,
+            index_curve=curve,
+            ir_vol=25.16,
+        )
+        expected = {
+            "Base Ccy": "USD",
+            "Cashflow": 149725.7965143448,
+            "Ccy": "USD",
+            "Collateral": None,
+            "DF": 0.969902553602701,
+            "FX Rate": 1.0,
+            "NPV": 145219.43237946142,
+            "NPV Ccy": 145219.43237946142,
+            "Notional": 100000000.0,
+            "Payment": dt(2027, 2, 18, 0, 0),
+            "Type": "IRSCallPeriod",
+        }
+        assert result == expected
+
+    def test_analytic_greeks(self):
+        from rateslib.instruments import IRS
+        from rateslib.solver import Solver
+
+        curve = Curve(
+            nodes={dt(2026, 2, 16): 1.0, dt(2028, 2, 16): 0.941024343401225}, calendar="nyc"
+        )
+        curve_solver = Solver(
+            curves=[curve],
+            instruments=[IRS(dt(2026, 2, 16), "1y", spec="usd_irs", curves=curve)],
+            s=[3.0],
+        )
+        ir_period = IRSCallPeriod(
+            expiry=dt(2027, 2, 16),
+            irs_series="usd_irs",
+            tenor="6m",
+            strike=3.020383,
+            notional=100e6,
+        )
+        result = ir_period.analytic_greeks(
+            rate_curve=curve,
+            disc_curve=curve,
+            index_curve=curve,
+            ir_vol=25.16,
+        )
+        expected = {
+            "__bs76": 0.2792463326582493,
+            "__forward": 2.9774664970728626,
+            "__sqrt_t": 1.0,
+            "__strike": 3.020383,
+            "__vol": 0.2516,
+            "__notional": 100e6,
+            "delta": 0.5274735620216011,
+            "gamma": 0.5312770889914765,
+            "vanna": 0.28897329599293436,
+            "vega": 1.185019484592725,
+            "delta_usd": 2534.939100519541,
+            "gamma_usd": 25.532181384278392,
+            "vega_usd": 5694.981592743021,
+            "vanna_usd": 13.88751512418925,
+            "delta_sticky": 0.5274735620216011,
+        }
+
+        # forward rate is increased by 1bp. Check the gamma and vanna values.
+        curve_solver.s = [3.01]
+        curve_solver.iterate()
+        result2 = ir_period.analytic_greeks(
+            rate_curve=curve,
+            disc_curve=curve,
+            index_curve=curve,
+            ir_vol=25.16,
+        )
+        assert abs(result2["delta_usd"] - result["delta_usd"] - result["gamma_usd"]) < 1.0
+        assert abs(result2["vega_usd"] - result["vega_usd"] - result["vanna_usd"]) < 2.0
+        assert all(abs(v - result[k]) < 1e-5 for k, v in expected.items())
+
+    def test_analytic_greeks_bachelier(self):
+        # this test compares the analytic_greeks results with a Solver framework (i,e, independent
+        # calculations) configured about a normal_vol metric.
+        from rateslib.instruments import IRS, IRVolValue
+        from rateslib.solver import Solver
+        from rateslib.volatility import IRSplineCube
+
+        curve = Curve(
+            nodes={dt(2026, 2, 16): 1.0, dt(2028, 2, 16): 0.941024343401225},
+            calendar="nyc",
+            id="r",
+        )
+        curve_solver = Solver(
+            curves=[curve],
+            instruments=[IRS(dt(2026, 2, 16), "1y", spec="usd_irs", curves=curve)],
+            s=[3.0],
+        )
+        ir_period = IRSCallPeriod(
+            expiry=dt(2027, 2, 16),
+            irs_series="usd_irs",
+            tenor="6m",
+            strike=3.020383,
+            notional=100e6,
+        )
+        cube = IRSplineCube(
+            eval_date=dt(2026, 2, 16),
+            expiries=[dt(2027, 2, 16)],
+            tenors=["6m"],
+            strikes=[0.0],
+            parameters=75.0,
+            irs_series="usd_irs",
+            id="v",
+        )
+        ir_vol_solver = Solver(
+            pre_solvers=[curve_solver],
+            surfaces=[cube],
+            instruments=[
+                IRVolValue(
+                    expiry=dt(2027, 2, 16),
+                    tenor="6m",
+                    strike=3.0,
+                    irs_series="usd_irs",
+                    metric="normal_vol",
+                    curves=curve,
+                    vol=cube,
+                )
+            ],
+            s=[75.0],
+            instrument_labels=["vol"],
+        )
+        result = ir_period.analytic_greeks(
+            rate_curve=curve,
+            disc_curve=curve,
+            index_curve=curve,
+            ir_vol=cube,
+        )
+        expected = {
+            "__bachelier": 0.27823818012037993,
+            "__forward": 2.9774664970728626,
+            "__sqrt_t": 1.0,
+            "__strike": 3.020383,
+            "__vol": 0.75,
+            "__notional": 100e6,
+            "delta": 0.47718417514818345,
+            "gamma": 0.5310528998576186,
+            "vanna": 0.030387911108272263,
+            "vega": 0.398289674893214,
+            "vomma": 0.001738857168037003,
+            "delta_usd": 2293.2577304846204,
+            "gamma_usd": 25.521407274593162,
+            "vega_usd": 1914.1055455944868,
+            "vanna_usd": 1.4603860666729847,
+            "vomma_usd": 0.08356621720682876,
+            "delta_sticky": 0.47718417514818345,
+        }
+
+        # first test that the calculations are generally static, i.e. quantities are obtainable
+        assert all(abs(v - result[k]) < 1e-5 for k, v in expected.items())
+
+        p = ir_period.npv(
+            rate_curve=curve,
+            index_curve=curve,
+            disc_curve=curve,
+            ir_vol=cube,
+            local=True,
+        )
+        _ = ir_vol_solver.delta(p)
+        exp_delta = _.iloc[0, 0]
+        exp_vega = _.iloc[1, 0]
+
+        for res, exp in zip(["delta_usd", "vega_usd"], [exp_delta, exp_vega]):
+            percent_diff = abs(result[res] - exp) / abs(exp)
+            assert percent_diff < 0.025
+
+        ir_vol_solver._set_ad_order(2)
+        p2 = ir_period.npv(
+            rate_curve=curve,
+            index_curve=curve,
+            disc_curve=curve,
+            ir_vol=cube,
+            local=True,
+        )
+        _ = ir_vol_solver.gamma(p2)
+        ir_vol_solver._set_ad_order(1)
+        exp_gamma = _.iloc[0, 0]
+        exp_vomma = _.iloc[1, 1]
+        exp_vanna = _.iloc[1, 0]
+
+        for res, exp in zip(
+            ["gamma_usd", "vanna_usd", "vomma_usd"], [exp_gamma, exp_vanna, exp_vomma]
+        ):
+            percent_diff2 = abs(result[res] - exp) / abs(exp)
+            assert percent_diff2 < 0.07 or abs(result[res] - exp) < 0.5
+
+        # test finite difference
+
+        # forward rate is increased by 1bp. Check the gamma and vanna values.
+        curve_solver.s = [3.01]
+        curve_solver.iterate()
+        ir_vol_solver.iterate()
+        result2 = ir_period.analytic_greeks(
+            rate_curve=curve,
+            disc_curve=curve,
+            index_curve=curve,
+            ir_vol=cube,
+        )
+        assert abs(result2["delta_usd"] - result["delta_usd"] - result["gamma_usd"]) < 1e-0
+        assert abs(result2["vega_usd"] - result["vega_usd"] - result["vanna_usd"]) < 5e-1
+
+        curve_solver.s = [3.00]
+        ir_vol_solver.s = [76.0]
+        curve_solver.iterate()
+        ir_vol_solver.iterate()
+        result3 = ir_period.analytic_greeks(
+            rate_curve=curve,
+            disc_curve=curve,
+            index_curve=curve,
+            ir_vol=cube,
+        )
+        assert abs(result3["delta_usd"] - result["delta_usd"] - result["vanna_usd"]) < 2e-2
+        assert abs(result3["vega_usd"] - result["vega_usd"] - result["vomma_usd"]) < 2e-3
+
+    @pytest.mark.parametrize(
+        ("ir_vol", "expected"),
+        [
+            (
+                IRSplineCube(
+                    eval_date=dt(2000, 1, 1),
+                    expiries=["1y"],
+                    tenors=["1y"],
+                    strikes=[-25, 0.0, 25.0],
+                    irs_series="usd_irs",
+                    parameters=[[[33.5, 32.5, 34.1]]],
+                    k=2,
+                    pricing_model="bachelier",
+                ),
+                0.5657673654151706,
+            ),
+            (
+                IRSplineCube(
+                    eval_date=dt(2000, 1, 1),
+                    expiries=["1y"],
+                    tenors=["1y"],
+                    strikes=[-25, 0.0, 25.0],
+                    irs_series="usd_irs",
+                    parameters=[[[33.5, 32.5, 34.1]]],
+                    k=2,
+                    pricing_model="black76",
+                ),
+                0.6338221418100394,
+            ),
+            (
+                IRSabrCube(
+                    eval_date=dt(2000, 1, 1),
+                    expiries=["1y"],
+                    tenors=["1y"],
+                    beta=0.5,
+                    irs_series="usd_irs",
+                    alpha=0.5,
+                    rho=-0.05,
+                    nu=0.65,
+                ),
+                0.5538666266910927,
+            ),
+        ],
+    )
+    def test_analytic_sticky_delta(self, ir_vol, expected):
+        ir_period = IRSCallPeriod(
+            expiry=dt(2001, 1, 1),
+            irs_series="usd_irs",
+            tenor="6m",
+            strike=3.45,
+            notional=100e6,
+        )
+        curve = Curve({dt(2000, 1, 1): 1.0, dt(2003, 1, 1): 0.9})
+        result = ir_period.analytic_greeks(
+            disc_curve=curve, rate_curve=curve, index_curve=curve, ir_vol=ir_vol
+        )
+        assert abs(result["delta"] - result["delta_sticky"]) > 0.01
+
+        assert abs(result["delta_sticky"] - expected) < 1e-5
+
+    def test_repr(self):
+        ir_period = IRSCallPeriod(
+            expiry=dt(2027, 2, 16),
+            irs_series="usd_irs",
+            tenor="6m",
+            strike=3.020383,
+            notional=100e6,
+        )
+        assert ir_period.__repr__() == f"<rl.IRSCallPeriod at {hex(id(ir_period))}>"
+
+    def test_raise_on_no_strike(self):
+        ir_period = IRSCallPeriod(
+            expiry=dt(2027, 2, 16),
+            irs_series="usd_irs",
+            tenor="6m",
+            notional=100e6,
+        )
+        with pytest.raises(
+            ValueError,
+            match="An FXOptionPeriod cashflow cannot be determined without setting a `strike`.",
+        ):
+            ir_period.unindexed_cashflow()
+
+    def test_cash_collateralized_settlement_with_fixing(self):
+        ir_period = IRSCallPeriod(
+            expiry=dt(2027, 2, 16),
+            irs_series="usd_irs",
+            tenor="6m",
+            notional=100e6,
+            strike=3.0,
+            option_fixings=3.05,
+            settlement_method="CashCollateralized",
+        )
+        curve = Curve({dt(2027, 2, 16): 1.0, dt(2028, 2, 16): 0.98})
+        result = ir_period.unindexed_cashflow(index_curve=curve)
+        expected = 24885.54  #  approx 5 * 0.993 * 5000
+        assert abs(result - expected) < 1e-2
+
+    def test_try_rate(self):
+        # if we know that the exercise will occur (from the fixing_value) value the cashflow
+        curve = Curve(
+            nodes={dt(2026, 2, 16): 1.0, dt(2028, 2, 16): 0.941024343401225}, calendar="nyc"
+        )
+        ir_period = IRSCallPeriod(
+            expiry=dt(2027, 2, 16),
+            irs_series="usd_irs",
+            tenor="6m",
+            strike=3.020383,
+            notional=100e6,
+        )
+        result = ir_period.try_rate(
+            rate_curve=curve,
+            disc_curve=curve,
+            index_curve=curve,
+            ir_vol=25.16,
+            metric="normal_vol",
+        )
+        assert isinstance(result, Ok)
+
+        result = ir_period.try_rate(
+            rate_curve=NoInput(0),
+            disc_curve=NoInput(0),
+            index_curve=NoInput(0),
+            metric="normal_vol",
+        )
+        assert isinstance(result, Err)
+
+    def test_rate_bachelier_metric(self):
+        curve = Curve(
+            nodes={dt(2026, 2, 16): 1.0, dt(2028, 2, 16): 0.941024343401225}, calendar="nyc"
+        )
+        ir_period = IRSCallPeriod(
+            expiry=dt(2027, 2, 16),
+            irs_series="usd_irs",
+            tenor="6m",
+            strike=3.020383,
+            notional=100e6,
+            metric="normal_vol",
+        )
+        smile = IRSplineSmile(
+            nodes={0: 50.0},
+            eval_date=dt(2026, 2, 16),
+            expiry=dt(2027, 2, 16),
+            tenor="6m",
+            irs_series="usd_irs",
+        )
+        smile2 = IRSabrSmile(
+            nodes={"alpha": 0.5, "rho": 0.01, "nu": 0.03},
+            beta=0.5,
+            eval_date=dt(2026, 2, 16),
+            expiry=dt(2027, 2, 16),
+            tenor="6m",
+            irs_series="usd_irs",
+        )
+        result = ir_period.try_rate(
+            rate_curve=curve,
+            disc_curve=curve,
+            index_curve=curve,
+            ir_vol=smile,
+        )
+        expected = 50.0
+        assert abs(result.unwrap() - expected) < 1e-2
+
+        result2 = ir_period.try_rate(
+            rate_curve=curve,
+            disc_curve=curve,
+            index_curve=curve,
+            ir_vol=smile2,
+        )
+        expected = 86.6790263475833
+        assert abs(result2.unwrap() - expected) < 1e-5
+
+        result3 = ir_period.try_rate(
+            rate_curve=curve,
+            disc_curve=curve,
+            index_curve=curve,
+            ir_vol=smile,
+            metric="black_vol_shift_50",
+        )
+        expected = 14.2149591308255
+        assert abs(result3.unwrap() - expected) < 1e-5

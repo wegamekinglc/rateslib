@@ -20,22 +20,22 @@ from rateslib import defaults
 from rateslib.enums.generics import NoInput
 from rateslib.instruments.protocols.kwargs import _KWArgs
 from rateslib.instruments.protocols.pricing import (
+    _get_curve,
     _get_fx_maybe_from_solver,
-    _maybe_get_curve_object_maybe_from_solver,
-    _maybe_get_curve_or_dict_object_maybe_from_solver,
-    _maybe_get_fx_vol_maybe_from_solver,
+    _get_fx_vol,
+    _maybe_get_ir_vol_maybe_from_solver,
+    _parse_curves,
+    _parse_vol,
     _WithPricingObjs,
 )
 
 if TYPE_CHECKING:
-    from rateslib.typing import (
+    from rateslib.local_types import (
         Any,
         CurvesT_,
         FXForwards_,
         Solver_,
         VolT_,
-        _Curves,
-        _Vol,
         datetime_,
         str_,
     )
@@ -147,26 +147,21 @@ class _WithCashflows(_WithPricingObjs, Protocol):
         # specific to that instrument
         assert hasattr(self, "legs")  # noqa: S101
 
-        _curves: _Curves = self._parse_curves(curves)
-        _vol: _Vol = self._parse_vol(vol)
-        _curves_meta: _Curves = self.kwargs.meta["curves"]
-        _vol_meta: _Vol = self.kwargs.meta["vol"]
+        c = _parse_curves(self, curves, solver)  # type: ignore[arg-type]
+        v = _parse_vol(self, vol, solver, False)  # type: ignore[call-overload, misc]
+        fx_vol = _get_fx_vol(True, True, *v)
+
         _fx_maybe_from_solver = _get_fx_maybe_from_solver(fx=fx, solver=solver)
 
-        fx_vol = _maybe_get_fx_vol_maybe_from_solver(_vol_meta, _vol, solver)
+        ir_vol = _maybe_get_ir_vol_maybe_from_solver(self.kwargs.meta["vol"], v[0], solver)
         legs_df = [
             self.legs[0].cashflows(
-                rate_curve=_maybe_get_curve_or_dict_object_maybe_from_solver(
-                    _curves_meta, _curves, "rate_curve", solver
-                ),
-                disc_curve=_maybe_get_curve_object_maybe_from_solver(
-                    _curves_meta, _curves, "disc_curve", solver
-                ),
-                index_curve=_maybe_get_curve_object_maybe_from_solver(
-                    _curves_meta, _curves, "index_curve", solver
-                ),
+                rate_curve=_get_curve("rate_curve", True, True, *c),
+                disc_curve=_get_curve("disc_curve", False, True, *c),
+                index_curve=_get_curve("index_curve", False, True, *c),
                 fx=_fx_maybe_from_solver,
                 fx_vol=fx_vol,
+                ir_vol=ir_vol,
                 settlement=settlement,
                 forward=forward,
                 base=base,
@@ -176,15 +171,9 @@ class _WithCashflows(_WithPricingObjs, Protocol):
         if len(self.legs) > 1:
             legs_df.append(
                 self.legs[1].cashflows(
-                    rate_curve=_maybe_get_curve_or_dict_object_maybe_from_solver(
-                        _curves_meta, _curves, "leg2_rate_curve", solver
-                    ),
-                    disc_curve=_maybe_get_curve_object_maybe_from_solver(
-                        _curves_meta, _curves, "leg2_disc_curve", solver
-                    ),
-                    index_curve=_maybe_get_curve_object_maybe_from_solver(
-                        _curves_meta, _curves, "leg2_index_curve", solver
-                    ),
+                    rate_curve=_get_curve("leg2_rate_curve", True, True, *c),
+                    disc_curve=_get_curve("leg2_disc_curve", False, True, *c),
+                    index_curve=_get_curve("leg2_index_curve", False, True, *c),
                     fx=_fx_maybe_from_solver,
                     fx_vol=fx_vol,
                     settlement=settlement,
@@ -199,7 +188,9 @@ class _WithCashflows(_WithPricingObjs, Protocol):
         with warnings.catch_warnings():
             # TODO: pandas 2.1.0 has a FutureWarning for concatenating DataFrames with Null entries
             warnings.filterwarnings("ignore", category=FutureWarning)
-            _: DataFrame = concat(dfs_filtered, keys=["leg1", "leg2"])
+            _: DataFrame = concat(
+                dfs_filtered, keys=[f"leg{i + 1}" for i in range(len(dfs_filtered))]
+            )
         return _
 
     def _cashflows_from_instruments(self, *args: Any, **kwargs: Any) -> DataFrame:

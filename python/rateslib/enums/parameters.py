@@ -13,6 +13,39 @@
 from __future__ import annotations
 
 from enum import Enum
+from typing import TYPE_CHECKING
+
+from rateslib.rs import FloatFixingMethod, IROptionMetric, LegIndexBase
+
+if TYPE_CHECKING:
+    from typing import NoReturn  # TODO: convert to Never on Python >= 3.11
+
+
+# LegIndexBase.__doc__ = """
+# Enumerable type for placement of ``index_base_date`` on each *Period* within a *Leg*.
+#
+# .. rubric:: Variants
+#
+# .. ipython:: python
+#    :suppress:
+#
+#    from rateslib.rs import LegIndexBase
+#    variants = [item for item in LegIndexBase.__dict__ if \\
+#        "__" != item[:2] and \\
+#        item not in ['to_json'] \
+#    ]
+#
+# .. ipython:: python
+#
+#    variants
+#
+# This is a **simple** enum and does not require initialization with other parameters. For example
+#
+# .. ipython:: python
+#
+#    _ = LegIndexBase.Initial
+#
+# """
 
 
 class OptionType(float, Enum):
@@ -33,6 +66,25 @@ class FXOptionMetric(Enum):
     Percent = 1
 
 
+class OptionPricingModel(Enum):
+    """
+    Enumerable type for option pricing models
+    """
+
+    Black76 = 0
+    Bachelier = 1
+
+
+class SwaptionSettlementMethod(Enum):
+    """
+    Enumerable type for swaption settlement methods.
+    """
+
+    Physical = 0
+    CashParTenor = 1
+    CashCollateralized = 2
+
+
 class LegMtm(Enum):
     """
     Enumerable type to define :class:`~rateslib.data.fixings.FXFixing` dates for non-deliverable
@@ -44,25 +96,6 @@ class LegMtm(Enum):
     Initial = 0
     XCS = 1
     Payment = 2
-
-
-_LEG_MTM_MAP = {
-    "initial": LegMtm.Initial,
-    "xcs": LegMtm.XCS,
-    "payment": LegMtm.Payment,
-}
-
-
-def _get_let_mtm(leg_mtm: str | LegMtm) -> LegMtm:
-    if isinstance(leg_mtm, LegMtm):
-        return leg_mtm
-    else:
-        try:
-            return _LEG_MTM_MAP[leg_mtm.lower()]
-        except KeyError:
-            raise ValueError(
-                f"`mtm` as string: '{leg_mtm}' is not a valid option. Please consult docs."
-            )
 
 
 class IndexMethod(Enum):
@@ -81,47 +114,6 @@ class IndexMethod(Enum):
 
     def __str__(self) -> str:
         return self.name
-
-
-class FloatFixingMethod(Enum):
-    """
-    Enumerable type to define floating period rate fixing methods.
-    """
-
-    RFRPaymentDelay = 0
-    RFRObservationShift = 1
-    RFRLockout = 2
-    RFRLookback = 3
-    RFRPaymentDelayAverage = 4
-    RFRObservationShiftAverage = 5
-    RFRLockoutAverage = 6
-    RFRLookbackAverage = 7
-    IBOR = 8
-
-    def __str__(self) -> str:
-        # _MAP = {
-        #     FloatFixingMethod.RFRPaymentDelay: "RFRPaymentDelay",
-        #     FloatFixingMethod.RFRObservationShift: "RFRObservationShift",
-        #     FloatFixingMethod.RFRLockout: "RFRLockout",
-        #     FloatFixingMethod.RFRLookback: "RFRLookback",
-        #     FloatFixingMethod.RFRPaymentDelayAverage: "RFRPaymentDelayAverage",
-        #     FloatFixingMethod.RFRObservationShiftAverage: "RFRObservationShiftAverage",
-        #     FloatFixingMethod.RFRLockoutAverage: "RFRLockoutAverage",
-        #     FloatFixingMethod.RFRLookbackAverage: "RFRLookbackAverage",
-        #     FloatFixingMethod.IBOR: "IBOR",
-        # }
-        _MAP = {
-            FloatFixingMethod.RFRPaymentDelay: "rfr_payment_delay",
-            FloatFixingMethod.RFRObservationShift: "rfr_observation_shift",
-            FloatFixingMethod.RFRLockout: "rfr_lockout",
-            FloatFixingMethod.RFRLookback: "rfr_lookback",
-            FloatFixingMethod.RFRPaymentDelayAverage: "rfr_payment_delay_avg",
-            FloatFixingMethod.RFRObservationShiftAverage: "rfr_observation_shift_avg",
-            FloatFixingMethod.RFRLockoutAverage: "rfr_lockout_avg",
-            FloatFixingMethod.RFRLookbackAverage: "rfr_lookback_avg",
-            FloatFixingMethod.IBOR: "ibor",
-        }
-        return _MAP[self]
 
 
 class SpreadCompoundMethod(Enum):
@@ -151,6 +143,98 @@ class FXDeltaMethod(Enum):
         return self.name
 
 
+_OPTION_PRICING_MAP = {
+    "black76": OptionPricingModel.Black76,
+    "bachelier": OptionPricingModel.Bachelier,
+    # aliases
+    "black": OptionPricingModel.Black76,
+    "log_normal": OptionPricingModel.Black76,
+    "normal": OptionPricingModel.Bachelier,
+    "normal_vol": OptionPricingModel.Bachelier,
+    "log_normal_vol": OptionPricingModel.Black76,
+    "black_vol": OptionPricingModel.Black76,
+    "black_vol_shift": OptionPricingModel.Black76,
+}
+
+
+def _get_option_pricing_model(
+    method: str | OptionPricingModel,
+) -> OptionPricingModel:
+    if isinstance(method, OptionPricingModel):
+        return method
+    else:
+        try:
+            return _OPTION_PRICING_MAP[method.lower()]
+        except KeyError:
+            raise ValueError(
+                f"`pricing_model` as string: '{method}' is not a valid option. Please consult docs."
+            )
+
+
+_SWAPTION_SETTLEMENT_MAP = {
+    "physical": SwaptionSettlementMethod.Physical,
+    "cash_par_tenor": SwaptionSettlementMethod.CashParTenor,
+    "cash_collateralized": SwaptionSettlementMethod.CashCollateralized,
+    # aliases
+    "cashcollateralized": SwaptionSettlementMethod.CashCollateralized,
+    "cashpartenor": SwaptionSettlementMethod.CashParTenor,
+}
+
+
+def _get_swaption_settlement_method(
+    method: str | SwaptionSettlementMethod,
+) -> SwaptionSettlementMethod:
+    if isinstance(method, SwaptionSettlementMethod):
+        return method
+    else:
+        try:
+            return _SWAPTION_SETTLEMENT_MAP[method.lower()]
+        except KeyError:
+            raise ValueError(
+                f"`swaption_settlement_method` as string: '{method}' is not a valid option. "
+                f"Please consult docs."
+            )
+
+
+_LEG_MTM_MAP = {
+    "initial": LegMtm.Initial,
+    "xcs": LegMtm.XCS,
+    "payment": LegMtm.Payment,
+}
+
+
+def _get_leg_mtm(leg_mtm: str | LegMtm) -> LegMtm:
+    if isinstance(leg_mtm, LegMtm):
+        return leg_mtm
+    else:
+        try:
+            return _LEG_MTM_MAP[leg_mtm.lower()]
+        except KeyError:
+            raise ValueError(
+                f"`mtm` as string: '{leg_mtm}' is not a valid option. Please consult docs."
+            )
+
+
+_LEG_INDEX_BASE_MAP = {
+    "initial": LegIndexBase.Initial,
+    "periodonperiod": LegIndexBase.PeriodOnPeriod,
+    "period_on_period": LegIndexBase.PeriodOnPeriod,
+}
+
+
+def _get_leg_index_base(leg_index: str | LegIndexBase) -> LegIndexBase:
+    if isinstance(leg_index, LegIndexBase):
+        return leg_index
+    else:
+        try:
+            return _LEG_INDEX_BASE_MAP[leg_index.lower()]
+        except KeyError:
+            raise ValueError(
+                f"`leg_index_base` as string: '{leg_index}' is not a valid option. "
+                f"Please consult docs."
+            )
+
+
 _INDEX_METHOD_MAP = {
     "daily": IndexMethod.Daily,
     "monthly": IndexMethod.Monthly,
@@ -171,7 +255,7 @@ def _get_index_method(index_method: str | IndexMethod) -> IndexMethod:
             )
 
 
-_FIXING_METHOD_MAP = {
+_FIXING_METHOD_MAP: dict[str, type[FloatFixingMethod]] = {
     "ibor": FloatFixingMethod.IBOR,
     "rfrpaymentdelay": FloatFixingMethod.RFRPaymentDelay,
     "rfrobservationshift": FloatFixingMethod.RFRObservationShift,
@@ -197,12 +281,26 @@ def _get_float_fixing_method(method: str | FloatFixingMethod) -> FloatFixingMeth
     if isinstance(method, FloatFixingMethod):
         return method
     else:
+        if method.lower() in ["rfrpaymentdelay", "rfr_payment_delay"]:
+            return FloatFixingMethod.RFRPaymentDelay()
+        elif method.lower() in ["rfrpaymentdelayaverage", "rfr_payment_delay_avg"]:
+            return FloatFixingMethod.RFRPaymentDelayAverage()
+
+        if not ("(" in method and method[-1] == ")"):
+            raise ValueError(
+                f"`fixing_method` as string: '{method}' must have an associated parameter "
+                f"contained in parentheses, for example 'ibor(2)' or 'rfr_observation_shift(5)'. "
+            )
+
+        method_, number_part = method[:-1].split("(")
+        number = int(number_part)
         try:
-            return _FIXING_METHOD_MAP[method.lower()]
+            enum_ = _FIXING_METHOD_MAP[method_.lower()]
         except KeyError:
             raise ValueError(
-                f"`fixing_method` as string: '{method}' is not a valid option. Please consult docs."
+                f"`fixing_method` as string: '{method_}' is not a valid FloatFixingMethod."
             )
+        return enum_(number)  # type: ignore[call-arg]
 
 
 _SPREAD_COMPOUNDING_METHOD_MAP = {
@@ -268,3 +366,56 @@ def _get_fx_option_metric(method: str | FXOptionMetric) -> FXOptionMetric:
                 f"FXOption `metric` as string: '{method}' is not a valid option. Please consult "
                 f"docs."
             )
+
+
+_IR_METRIC_MAP: dict[str, type[IROptionMetric]] = {
+    "normal_vol": IROptionMetric.NormalVol,
+    "premium": IROptionMetric.Premium,
+    "percent_notional": IROptionMetric.PercentNotional,
+    "black_vol_shift": IROptionMetric.BlackVolShift,
+    # aliases
+    "normalvol": IROptionMetric.NormalVol,
+    "percentnotional": IROptionMetric.PercentNotional,
+    "blackvolshift": IROptionMetric.BlackVolShift,
+}
+
+
+def _get_ir_option_metric(method: str | IROptionMetric) -> IROptionMetric:
+    if isinstance(method, IROptionMetric):
+        return method
+    else:
+        method = method.lower()
+        if "shift" in method:
+            idx = method.rfind("_")
+            if idx < 0:
+                raise ValueError(
+                    "The 'BlackVolShift' metric must have an underscore and shift, e.g. "
+                    "'black_vol_shift_100"
+                )
+            else:
+                args: tuple[NoReturn, ...] | tuple[int] = (int(method[idx + 1 :]),)
+            method = method[:idx]
+        else:
+            args = tuple()
+
+        try:
+            return _IR_METRIC_MAP[method](*args)
+        except KeyError:
+            raise ValueError(
+                f"IROption `metric` as string: '{method}' is not a valid option. Please consult "
+                f"documentation."
+            )
+
+
+__all__ = [
+    "SpreadCompoundMethod",
+    "FloatFixingMethod",
+    "FXDeltaMethod",
+    "FXOptionMetric",
+    "IROptionMetric",
+    "LegMtm",
+    "LegIndexBase",
+    "OptionType",
+    "OptionPricingModel",
+    "IndexMethod",
+]

@@ -15,18 +15,20 @@ from typing import TYPE_CHECKING, NoReturn
 
 from rateslib import defaults
 from rateslib.enums.generics import NoInput, _drb
-from rateslib.fx_volatility import FXDeltaVolSmile, FXDeltaVolSurface, FXSabrSmile, FXSabrSurface
 from rateslib.instruments.protocols import _BaseInstrument
 from rateslib.instruments.protocols.kwargs import _KWArgs
 from rateslib.instruments.protocols.pricing import (
     _get_fx_forwards_maybe_from_solver,
-    _maybe_get_fx_vol_maybe_from_solver,
+    _get_fx_vol,
+    _parse_vol,
     _Vol,
 )
 from rateslib.periods.utils import _validate_fx_as_forwards
+from rateslib.volatility import FXDeltaVolSmile, FXDeltaVolSurface, FXSabrSmile, FXSabrSurface
+from rateslib.volatility.ir import _BaseIRCube, _BaseIRSmile
 
 if TYPE_CHECKING:
-    from rateslib.typing import (  # pragma: no cover
+    from rateslib.local_types import (  # pragma: no cover
         Any,
         CurvesT_,
         DualTypes,
@@ -47,13 +49,13 @@ class FXVolValue(_BaseInstrument):
 
     Examples
     --------
-    The below :class:`~rateslib.fx_volatility.FXDeltaVolSmile` is solved directly
+    The below :class:`~rateslib.volatility.FXDeltaVolSmile` is solved directly
     from calibrating volatility values.
 
     .. ipython:: python
        :suppress:
 
-       from rateslib.fx_volatility import FXDeltaVolSmile
+       from rateslib.volatility import FXDeltaVolSmile
        from rateslib.instruments import FXVolValue
        from rateslib.solver import Solver
 
@@ -134,7 +136,12 @@ class FXVolValue(_BaseInstrument):
     def _parse_vol(self, vol: VolT_) -> _Vol:
         if isinstance(vol, _Vol):
             return vol
-        return _Vol(fx_vol=vol)
+        elif isinstance(vol, _BaseIRSmile | _BaseIRCube):
+            raise TypeError(
+                f"`vol` must be suitable object for FX vol pricing. Got {type(vol).__name__}"
+            )
+        else:
+            return _Vol(fx_vol=vol)
 
     def rate(
         self,
@@ -172,13 +179,11 @@ class FXVolValue(_BaseInstrument):
         float, Dual, Dual2, Variable
 
         """
-        _vol: _Vol = self._parse_vol(vol)
+        v = _parse_vol(self, vol, solver, False)
         metric_ = _drb(self.kwargs.meta["metric"], metric).lower()
 
         if metric_ == "vol":
-            vol_ = _maybe_get_fx_vol_maybe_from_solver(
-                vol_meta=self.kwargs.meta["vol"], solver=solver, vol=_vol
-            )
+            vol_ = _get_fx_vol(False, False, *v)
             if isinstance(vol_, FXDeltaVolSmile | FXDeltaVolSurface):
                 # Must initialise with an ``expiry`` if a Surface is used
                 return vol_._get_index(
@@ -206,7 +211,9 @@ class FXVolValue(_BaseInstrument):
                     expiry=self.kwargs.leg1["expiry"],
                 )[1]
             else:
-                raise ValueError("`vol` as an object must be provided for VolValue.")
+                raise RuntimeError(
+                    "FX Vol type is unmapped. Please report this issue."
+                )  # pragma: no cover
 
         raise ValueError("`metric` must be in {'vol'}.")
 

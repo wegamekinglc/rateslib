@@ -14,7 +14,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from rateslib import defaults
-from rateslib.curves._parsers import _validate_obj_not_no_input
 from rateslib.dual import Variable, gradient
 from rateslib.dual.utils import _dual_float, _to_number
 from rateslib.enums.generics import NoInput, _drb
@@ -27,7 +26,8 @@ from rateslib.instruments.bonds.protocols import _BaseBondInstrument
 from rateslib.instruments.protocols.kwargs import _convert_to_schedule_kwargs, _KWArgs
 from rateslib.instruments.protocols.pricing import (
     _Curves,
-    _maybe_get_curve_maybe_from_solver,
+    _get_curve,
+    _parse_curves,
     _Vol,
 )
 from rateslib.legs import FixedLeg
@@ -35,7 +35,7 @@ from rateslib.scheduling import Schedule
 from rateslib.scheduling.frequency import _get_frequency
 
 if TYPE_CHECKING:
-    from rateslib.typing import (  # pragma: no cover
+    from rateslib.local_types import (  # pragma: no cover
         CalInput,
         CurvesT_,
         DualTypes,
@@ -336,15 +336,9 @@ class Bill(_BaseBondInstrument):
         -------
         float, Dual, Dual2
         """
-        disc_curve_ = _validate_obj_not_no_input(
-            _maybe_get_curve_maybe_from_solver(
-                solver=solver,
-                name="disc_curve",
-                curves=self._parse_curves(curves),
-                curves_meta=self.kwargs.meta["curves"],
-            ),
-            "disc_curve",
-        )
+        c = _parse_curves(self, curves, solver)
+        disc_curve_ = _get_curve("disc_curve", False, False, *c)
+
         settlement_ = self._maybe_get_settlement(settlement=settlement, disc_curve=disc_curve_)
 
         # scale price to par 100 and make a fwd adjustment according to curve

@@ -23,7 +23,7 @@ from rateslib.dual.utils import _dual_float, _get_order_of, gradient, set_order
 from rateslib.rs import Dual, Dual2
 
 if TYPE_CHECKING:
-    from rateslib.typing import DualTypes, Number
+    from rateslib.local_types import DualTypes, Number
 
 P = ParamSpec("P")
 
@@ -39,7 +39,15 @@ def ift_1dim(
     raise_on_fail: bool = True,
 ) -> dict[str, Any]:
     r"""
-    Use the inverse function theorem to determine a function value of **one** variable.
+    A **one** dimensional root solver using the inverse function theorem to capture
+    AD sensitivities.
+
+    This method can be used to find the value of :math:`g(s)` for a given :math:`s_{tgt}`, where:
+
+    - :math:`g(s)` is **not** analytical and hence requires iterations to determine.
+    - :math:`s(g)` is a known analytical inverse of :math:`g`.
+
+    This problem is framed by finding the root of :math:`f(g) = s(g) - s_{tgt} = 0`.
 
     Parameters
     ----------
@@ -64,27 +72,24 @@ def ift_1dim(
     ------
     **Available iterative methods**
 
-    - **'bisection'**: requires ``ini_h_args`` to be a tuple of two floats defining the interval.
-      The interval will be halved in each iteration and the relevant interval side kept.
-    - **'modified_dekker'**: Requires ``ini_h_args`` to be a tuple of two floats defining the
-      interval. For info see
+    The iteration algorithm to find the root can be given directly as a callable ``h`` or
+    can be specified from one of the below pre-implemented algorithms:
+
+    - **'bisection'**: repeatedly halves an interval and selects the interval in which the root
+      falls, until convergence. Requires ``ini_h_args`` to be a tuple of two floats defining
+      the interval whose *f* values have opposite signs.
+    - **'modified_dekker'**: enhances the *'bisection'* method to include a *'secant'* step when
+      it produces a better iterate. Requires ``ini_h_args`` to be a tuple of two floats defining
+      the interval whose *f* values have opposite signs. For info see
       :download:`Halving Interval for Dekker<_static/modified-dekker.pdf>`.
-    - **'modified_brent'**: Requires ``ini_h_args`` to be a tuple of two floats defining the
-      interval. For info see
-      :download:`Halving Interval for Brent<_static/modified-dekker.pdf>`.
+    - **'modified_brent'**: enhances the *'modified_dekker'* method to also permit
+      inverse quadratic interpolation within an iteration.
+      Requires ``ini_h_args`` to be a tuple of two floats defining
+      the interval whose *f* values have opposite signs. For info see
+      :download:`Halving Interval for Dekker<_static/modified-dekker.pdf>`.
     - **'ytm_quadratic'**: Requires ``ini_h_args`` to be a tuple of three floats defining the
-      interval and interior point. This algorithm utilises sequential quadratic approximation
-      and is specifically tuned for solving bond yield-to-maturity.
-
-    **Mathematical background**
-
-    This method is used to find the value of *g* from *s* in the one-dimensional equation:
-
-    .. math::
-
-       g(s) \qquad \text{where,} \qquad s(g) \; \text{is a known analytical inverse of} \; g.
-
-    :math:`g(s)` is not analytical and hence requires iterations to determine.
+      interval and interior point. This algorithm utilises successive parabolic approximations
+      for *g(f)* and is specifically tuned for solving bond yield-to-maturity efficiently.
 
     **What is ``h``**
 
@@ -138,6 +143,17 @@ def ift_1dim(
 
        # solve for a bond price of 101 with lower and upper ytm bounds of 2.0 and 3.0.
        result = ift_1dim(s, Dual(101.0, ["price"], []), "bisection", (2.0, 3.0))
+       print(result)
+
+    For **traditional root solving** the function :math:`s(g)` is given with the :math:`s_{tgt}`
+    set to zero, therefore the returned *g* will be the root of *s(g)*.
+
+    .. ipython:: python
+
+       def s(g):
+            return g ** 2 - 2
+
+       result = ift_1dim(s, 0.0, "modified_brent", (-2.0, 0.0))
        print(result)
 
     """
@@ -228,28 +244,33 @@ def _bisection(
     All calculated values are returned to prevent re-calculation in the next iteration.
 
     The `ini_hargs` needed for this method are only (g_lower, g_upper).
+
+    Returns
+    -------
+    g_i, f_i, state, *h_args_i
     """
     if s_lower is None:
-        s_lower = s(g_lower)  # type: ignore[assignment]
+        s_lower = _dual_float(s(g_lower))
     if s_upper is None:
-        s_upper = s(g_upper)  # type: ignore[assignment]
+        s_upper = _dual_float(s(g_upper))
 
-    f_lower = s_lower - s_tgt  # type: ignore[operator]
-    f_upper = s_upper - s_tgt  # type: ignore[operator]
+    f_lower = s_lower - s_tgt
+    f_upper = s_upper - s_tgt
 
-    if float(f_lower * f_upper) > 0:
-        return 0, 0, -2, 0, 0, 0  # return failed state
+    if _dual_float(f_lower * f_upper) > 0:
+        # return a failed state because boundaries must be opposite sign to imply root.
+        return 0, 0, -2, 0, 0, 0
 
     g_mid = (g_lower + g_upper) / 2.0
-    s_mid = s(g_mid)
+    s_mid = _dual_float(s(g_mid))
     f_mid = s_mid - s_tgt
 
-    if (g_mid - g_lower) < conv_tol:
+    if abs(g_mid - g_lower) < conv_tol:
         state: int | None = 1
     else:
         state = None
 
-    if float(f_lower * f_mid) > 0:  # type: ignore[arg-type]
+    if _dual_float(f_lower * f_mid) > 0:
         # then lower and mid have same sign so must return upper interval
         if abs(f_mid) < abs(f_upper):
             return g_mid, f_mid, state, g_mid, g_upper, s_mid, s_upper  # type: ignore[return-value]
@@ -275,10 +296,10 @@ def _dekker(
     conv_tol: float,
     a_k: float,
     b_k: float,
-    b_k_: float | None = None,
+    b_k_m1: float | None = None,
     cached_f_a_k: float | None = None,
     cached_f_b_k: float | None = None,
-    cached_f_b_k_: float | None = None,
+    cached_f_b_k_m1: float | None = None,
 ) -> tuple[float, float, int | None, float, float, float, float, float, float]:
     """
     Alternative root solver.
@@ -286,58 +307,51 @@ def _dekker(
 
     Cached values allow value transmission from one function to the next with many efficiencies.
     """
-
-    # Load cached values
-    if cached_f_a_k is None:
-        f_a_k = _root_f(a_k, s, s_tgt)
-    else:
-        f_a_k = cached_f_a_k
-
-    if cached_f_b_k is None:
-        f_b_k = _root_f(b_k, s, s_tgt)
-    else:
-        f_b_k = cached_f_b_k
-
-    if abs(a_k - b_k) < conv_tol:
-        return b_k, f_b_k, 1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-
-    # for the first iteration set b_k_m1 equal to a_k, else it is returned from previous
-    if b_k_ is None:
-        # then the first iteration is active (b_k_ is only None once), also check for side
+    if b_k_m1 is None:  # (which is read b k minus 1)
+        # b_k_m1 is None only once. This indicates the first iteration so no caches are present.
+        f_a_k = _dual_float(_root_f(a_k, s, s_tgt))
+        f_b_k = _dual_float(_root_f(b_k, s, s_tgt))
         if abs(f_a_k) < abs(f_b_k):
-            # switch to make b_k the 'best' solution
+            # switch to make b_k the 'closest' solution
             f_a_k, f_b_k = f_b_k, f_a_k
             a_k, b_k = b_k, a_k
 
-        b_k_m1: float = a_k
+        # in the first iteration set b_k_m1 = a_k
+        b_k_m1 = a_k
         f_b_k_m1 = f_a_k
     else:
-        b_k_m1 = b_k_
-        if cached_f_b_k_ is None:
-            f_b_k_m1 = _root_f(b_k_m1, s, s_tgt)
-        else:
-            f_b_k_m1 = cached_f_b_k_
+        # subsequent iterations will contain all cached values
+        f_a_k = cached_f_a_k  # type: ignore[assignment]
+        f_b_k = cached_f_b_k  # type: ignore[assignment]
+        f_b_k_m1 = cached_f_b_k_m1  # type: ignore[assignment]
 
-    # provisional values for the next iteration
+    if abs(a_k - b_k) < conv_tol:
+        # the interval is within tolerance so report converged, b_k should be the 'best' solution.
+        return b_k, f_b_k, 1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+
     m = (a_k + b_k) / 2.0  # midpoint
-    q = b_k - f_b_k * (b_k - b_k_m1) / (f_b_k - f_b_k_m1)  # secant
+    # secant
+    if abs(f_b_k - f_b_k_m1) < 1e-16:
+        # secant is divide by zero error
+        q = max(b_k, m) + 1.0
+    else:
+        q = b_k - f_b_k * (b_k - b_k_m1) / (f_b_k - f_b_k_m1)
 
     if q >= min(b_k, m) and q <= max(b_k, m):
-        b_k_p1 = q
+        b_k_p1 = q  # accept the secant as an estimated better iterate
     else:
-        b_k_p1 = m
-
-    f_b_k_p1 = _root_f(b_k_p1, s, s_tgt)
+        b_k_p1 = m  # discard the secant as it is outside of the window
+    f_b_k_p1 = _dual_float(_root_f(b_k_p1, s, s_tgt))
 
     # determine a_k_p1
     a_k_p1 = a_k
     f_a_k_p1 = f_a_k
-    if float(f_a_k * f_b_k_p1) > 0:
+    if f_a_k * f_b_k_p1 > 0:
         a_k_p1 = b_k
         f_a_k_p1 = f_b_k
     elif q >= min(b_k, m) and q <= max(b_k, m):
-        f_m = _root_f(m, s, s_tgt)
-        if float(f_m * f_b_k_p1) < 0:
+        f_m = _dual_float(_root_f(m, s, s_tgt))
+        if f_m * f_b_k_p1 < 0:
             a_k_p1 = m
             f_a_k_p1 = f_m
 
@@ -345,9 +359,12 @@ def _dekker(
         # switch to make b_k the 'best' solution
         f_a_k_p1, f_b_k_p1 = f_b_k_p1, f_a_k_p1
         a_k_p1, b_k_p1 = b_k_p1, a_k_p1
-        # also switch the existing values
-        f_a_k, f_b_k = f_b_k, f_a_k
-        a_k, b_k = b_k, a_k
+
+        if abs(f_b_k_p1 - f_b_k) < 1e-15:
+            # also switch the existing values to avoid secant divide by zero errros
+            f_b_k, b_k = f_a_k, a_k
+            # f_a_k, f_b_k = f_b_k, f_a_k
+            # a_k, b_k = b_k, a_k
 
     return b_k_p1, f_b_k_p1, None, a_k_p1, b_k_p1, b_k, f_a_k_p1, f_b_k_p1, f_b_k
 
@@ -358,10 +375,10 @@ def _brent(
     conv_tol: float,
     a_k: float,
     b_k: float,
-    b_k_: float | None = None,
+    b_k_m1: float | None = None,
     cached_f_a_k: float | None = None,
     cached_f_b_k: float | None = None,
-    cached_f_b_k_: float | None = None,
+    cached_f_b_k_m1: float | None = None,
 ) -> tuple[float, float, int | None, float, float, float, float, float, float]:
     """
     Alternative root solver.
@@ -369,54 +386,50 @@ def _brent(
 
     Cached values allow value transmission from one function to the next with many efficiencies.
     """
+    if b_k_m1 is None:  # (which is read b k minus 1)
+        # b_k_m1 is None only once. This indicates the first iteration so no caches are present.
+        f_a_k = _dual_float(_root_f(a_k, s, s_tgt))
+        f_b_k = _dual_float(_root_f(b_k, s, s_tgt))
+        if abs(f_a_k) < abs(f_b_k):
+            # switch to make b_k the 'closest' solution
+            f_a_k, f_b_k = f_b_k, f_a_k
+            a_k, b_k = b_k, a_k
 
-    # Load cached values
-    if cached_f_a_k is None:
-        f_a_k = _root_f(a_k, s, s_tgt)
+        # in the first iteration set b_k_m1 = a_k
+        b_k_m1 = a_k
+        f_b_k_m1 = f_a_k
     else:
-        f_a_k = cached_f_a_k
-
-    if cached_f_b_k is None:
-        f_b_k = _root_f(b_k, s, s_tgt)
-    else:
-        f_b_k = cached_f_b_k
+        # subsequent iterations will contain all cached values
+        f_a_k = cached_f_a_k  # type: ignore[assignment]
+        f_b_k = cached_f_b_k  # type: ignore[assignment]
+        f_b_k_m1 = cached_f_b_k_m1  # type: ignore[assignment]
 
     if abs(a_k - b_k) < conv_tol:
         return b_k, f_b_k, 1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
-    # for the first iteration set b_k_m1 equal to a_k, else it is returned from previous
-    if b_k_ is None:
-        # then the first iteration is active (b_k_ is only None once) so also check the side
-        if abs(f_a_k) < abs(f_b_k):
-            # switch to make b_k the 'best' solution
-            f_a_k, f_b_k = f_b_k, f_a_k
-            a_k, b_k = b_k, a_k
-
-        b_k_m1: float = a_k
-        f_b_k_m1 = f_a_k
-    else:
-        b_k_m1 = b_k_
-        if cached_f_b_k_ is None:
-            f_b_k_m1 = _root_f(b_k_m1, s, s_tgt)
-        else:
-            f_b_k_m1 = cached_f_b_k_
-
+    m = (a_k + b_k) / 2.0
     # provisional values for the next iteration
-    if b_k == b_k_m1 or a_k == b_k_m1:
-        denom = f_b_k - f_b_k_m1
-        q = b_k - f_b_k * (b_k - b_k_m1) / denom  # secant
-    else:
+    if f_a_k != f_b_k and f_a_k != f_b_k_m1 and f_b_k != f_b_k_m1:
+        # then all three function values are distinct: use inverse quadratic interpolation
         fba = f_b_k / f_a_k
-        fbbm = f_b_k / f_b_k_m1
-        fabm = f_a_k / f_b_k_m1
-        denom = (fbbm - 1.0) * (fba - 1.0) * (fabm - 1.0)
-        q = b_k + fba * ((1.0 - fbbm) * (a_k - b_k) + fabm * (fbbm - fabm) * (b_k_m1 - b_k)) / denom
-
-    if q <= min(b_k, (3.0 * a_k + b_k) / 4.0) or q >= max(b_k, (3.0 * a_k + b_k) / 4.0):
-        q = (a_k + b_k) / 2.0
+        fbbm1 = f_b_k / f_b_k_m1
+        fabm1 = f_a_k / f_b_k_m1
+        numerator = fba * ((1.0 - fbbm1) * (a_k - b_k) + fabm1 * (fbbm1 - fabm1) * (b_k_m1 - b_k))
+        denominator = (fbbm1 - 1.0) * (fba - 1.0) * (fabm1 - 1.0)
+        q = b_k + numerator / denominator
+    else:
+        # use secant
+        if abs(f_b_k - f_b_k_m1) < 1e-16:
+            # secant is div by zero error this ensures bisection is chosen
+            q = min(b_k, (3.0 * a_k + b_k) / 4.0) - 1.0
+        else:
+            q = b_k - f_b_k * (b_k - b_k_m1) / (f_b_k - f_b_k_m1)
+    w = (min(b_k, (3.0 * a_k + b_k) / 4.0), max(b_k, (3.0 * a_k + b_k) / 4.0))
+    if q <= w[0] or q >= w[1]:
+        q = m
 
     b_k_p1 = q
-    f_b_k_p1 = _root_f(b_k_p1, s, s_tgt)
+    f_b_k_p1 = _dual_float(_root_f(b_k_p1, s, s_tgt))
 
     a_k_p1 = a_k
     f_a_k_p1 = f_a_k
@@ -424,8 +437,7 @@ def _brent(
         a_k_p1 = b_k
         f_a_k_p1 = f_b_k
     else:
-        m = (a_k + b_k) / 2.0
-        f_m = _root_f(m, s, s_tgt)
+        f_m = _dual_float(_root_f(m, s, s_tgt))
         if float(f_m * f_b_k_p1) < 0:
             a_k_p1 = m
             f_a_k_p1 = f_m
@@ -434,9 +446,9 @@ def _brent(
         # switch to make b_k the 'best' solution
         f_a_k_p1, f_b_k_p1 = f_b_k_p1, f_a_k_p1
         a_k_p1, b_k_p1 = b_k_p1, a_k_p1
-        # also switch the existing values
-        f_a_k, f_b_k = f_b_k, f_a_k
-        a_k, b_k = b_k, a_k
+        # # also switch the existing values
+        # f_a_k, f_b_k = f_b_k, f_a_k
+        # a_k, b_k = b_k, a_k
 
     return b_k_p1, f_b_k_p1, None, a_k_p1, b_k_p1, b_k, f_a_k_p1, f_b_k_p1, f_b_k
 
@@ -457,6 +469,10 @@ def _ytm_quadratic(
     See docs/source/_static/modified-dekker.pdf for details.
 
     Cached values allow value transmission from one function to the next with many efficiencies.
+
+    Returns
+    -------
+    g_i, f_i=s_i-s_tgt, state, *h_args_i = (g0, g1, g2, f0, f1, f2)
     """
 
     # Load cached values
@@ -464,7 +480,7 @@ def _ytm_quadratic(
     f1: float = cached_f1 if cached_f1 is not None else _root_f(g1, s, s_tgt)
     f2: float = cached_f2 if cached_f2 is not None else _root_f(g2, s, s_tgt)
 
-    # Test interval
+    # Test interval: if all values are same sign translate the interval.
     if f0 < 0 and f1 < 0 and f2 < 0:
         # then g(s*) must be
         g0_ = g0 - (g2 - g0)
@@ -476,6 +492,99 @@ def _ytm_quadratic(
         g1_ = g1 + (g2 - g0)
         g2_ = g2 + 2 * (g2 - g0)
         return g1_, 1e9, None, g0_, g1_, g2_, None, None, None
+
+    # Solve g_new via quadratic approximation
+
+    # # Linear algebra solution
+    # _b = np.array([g0, g1, g2])[:, None]
+    # _A = np.array([[f0**2, f0, 1], [f1**2, f1, 1], [f2**2, f2, 1]])
+    # x = np.linalg.solve(_A, _b)
+    # g_new = x[2, 0]
+
+    # Analytical solution (via Gaussian elimination)
+    f012, f022, f01, f02, g01, g02 = (
+        f0**2 - f1**2,
+        f0**2 - f2**2,
+        f0 - f1,
+        f0 - f2,
+        g0 - g1,
+        g0 - g2,
+    )
+    x0 = (g01 * f02 - g02 * f01) / (f012 * f02 - f022 * f01)
+    x1 = (g01 - x0 * f012) / f01
+    x2 = g0 - x1 * f0 - x0 * f0**2
+    g_new = x2
+
+    # # Lagrange interpolation formula is a valid alternative solution
+    # g_new_compare = g0 * f1 * f2 / ((f0 - f1) * (f0 - f2))
+    # g_new_compare += g1 * f0 * f2 / ((f1 - f0) * (f1 - f2))
+    # g_new_compare += g2 * f0 * f1 / ((f2 - f0) * (f2 - f1))
+    # assert abs(g_new_compare - g_new) < 1e-8
+
+    if g_new < g0 or g_new > g2:
+        # if the quadratic approximation is outside the interval then use a bisection method
+        if f0 * f1 < 0:
+            # bisect in the left hand side
+            g_new = g0 + (g1 - g0) * f0 / (f0 - f1)
+        else:
+            # bisect in the right hand side
+            g_new = g1 - (g2 - g1) * f1 / (f2 - f1)
+
+    f_new = _root_f(g_new, s, s_tgt)
+    for g_ in [g0, g1, g2]:
+        if abs(g_ - g_new) < conv_tol:
+            return g_new, f_new, 1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+
+    if g0 < g_new and g_new < g1:
+        return g_new, f_new, None, g0, g_new, g1, f0, f_new, f1
+    else:  # g1 < g_new and g_new < g2:
+        return g_new, f_new, None, g1, g_new, g2, f1, f_new, f2
+    # else:
+    #     raise RuntimeError("Unexpected interval: this line should never be reached.")
+
+
+def _quadratic_approx(
+    s: Callable[[DualTypes], DualTypes],
+    s_tgt: float,
+    conv_tol: float,
+    g0: float,
+    g1: float,
+    g2: float,
+    cached_f0: float | None = None,
+    cached_f1: float | None = None,
+    cached_f2: float | None = None,
+) -> tuple[float, float, int | None, float, float, float, float | None, float | None, float | None]:
+    """
+    Appro
+
+    Cached values allow value transmission from one function to the next with many efficiencies.
+
+    Returns
+    -------
+    g_i, f_i=s_i-s_tgt, state, *h_args_i = (g0, g1, g2, f0, f1, f2)
+    """
+
+    # Load cached values
+    f0: float = cached_f0 if cached_f0 is not None else _root_f(g0, s, s_tgt)
+    f1: float = cached_f1 if cached_f1 is not None else _root_f(g1, s, s_tgt)
+    f2: float = cached_f2 if cached_f2 is not None else _root_f(g2, s, s_tgt)
+
+    # Test interval: if all values are same sign translate the guess interval.
+    if (f0 < 0 and f1 < 0 and f2 < 0) or (f0 > 0 and f1 > 0 and f2 > 0):
+        # Then all f = s-s_tgt are above or below zero and there is no crossing point.
+        # Shift the entire initial guesses lower or higher based the linear gradient.
+        if (f0 < 0 and f2 > f0) or (f0 > 0 and f2 < f0):
+            # Shift g to the right
+            g0_ = g2
+            g1_ = g1 + (g2 - g0)
+            g2_ = g2 + 2 * (g2 - g0)
+            return g1_, conv_tol, None, g0_, g1_, g2_, f2, None, None
+        else:
+            # Shift g to the left
+            g0_ = g0 - (g2 - g0)
+            g1_ = g1 - (g2 - g1)
+            g2_ = g0
+            return g1_, conv_tol, None, g0_, g1_, g2_, None, None, f0
 
     # Solve g_new via quadratic approximation
 
@@ -526,4 +635,5 @@ ift_map: dict[str, Callable[P, tuple[float, float, int, tuple[Any, ...]]]] = {
     "modified_dekker": _dekker,  # type: ignore[dict-item]
     "modified_brent": _brent,  # type: ignore[dict-item]
     "ytm_quadratic": _ytm_quadratic,  # type: ignore[dict-item]
+    "quadratic_approx": _quadratic_approx,  # type: ignore[dict-item]
 }

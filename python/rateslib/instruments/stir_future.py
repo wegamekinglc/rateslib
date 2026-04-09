@@ -20,21 +20,19 @@ from rateslib.instruments.protocols import _BaseInstrument
 from rateslib.instruments.protocols.kwargs import _convert_to_schedule_kwargs, _KWArgs
 from rateslib.instruments.protocols.pricing import (
     _Curves,
+    _get_curve,
     _get_fx_maybe_from_solver,
-    _maybe_get_curve_maybe_from_solver,
-    _maybe_get_curve_object_maybe_from_solver,
-    _maybe_get_curve_or_dict_maybe_from_solver,
+    _parse_curves,
     _Vol,
 )
 from rateslib.legs import FixedLeg, FloatLeg
 from rateslib.periods.utils import (
     _maybe_fx_converted,
     _maybe_local,
-    _validate_base_curve,
 )
 
 if TYPE_CHECKING:
-    from rateslib.typing import (  # pragma: no cover
+    from rateslib.local_types import (  # pragma: no cover
         CalInput,
         CurvesT_,
         DataFrame,
@@ -166,8 +164,6 @@ class STIRFuture(_BaseInstrument):
     leg2_fixing_method: FloatFixingMethod, str, :green:`optional (set by 'defaults')`
         The :class:`~rateslib.enums.parameters.FloatFixingMethod` describing the determination
         of the floating rate for each period.
-    leg2_method_param: int, :green:`optional (set by 'defaults')`
-        A specific parameter that is used by the specific ``fixing_method``.
     leg2_fixing_frequency: Frequency, str, :green:`optional (set by 'frequency' or '1B')`
         The :class:`~rateslib.scheduling.Frequency` as a component of the
         :class:`~rateslib.data.fixings.FloatRateIndex`. If not given is assumed to match the
@@ -175,7 +171,7 @@ class STIRFuture(_BaseInstrument):
     leg2_fixing_series: FloatRateSeries, str, :green:`optional (implied by other parameters)`
         The :class:`~rateslib.data.fixings.FloatRateSeries` as a component of the
         :class:`~rateslib.data.fixings.FloatRateIndex`. If not given inherits attributes given
-        such as the ``calendar``, ``convention``, ``method_param`` etc.
+        such as the ``calendar``, ``convention``, ``fixing_method`` etc.
     leg2_float_spread: float, Dual, Dual2, Variable, :green:`optional (set as 0.0)`
         The amount (in bps) added to the rate in each period rate determination.
     leg2_spread_compound_method: SpreadCompoundMethod, str, :green:`optional (set by 'defaults')`
@@ -327,7 +323,6 @@ class STIRFuture(_BaseInstrument):
         leg2_spread_compound_method: str_ = NoInput(0),
         leg2_rate_fixings: FixingsRates_ = NoInput(0),
         leg2_fixing_method: str_ = NoInput(0),
-        leg2_method_param: int_ = NoInput(0),
         leg2_fixing_frequency: Frequency | str_ = NoInput(0),
         leg2_fixing_series: FloatRateSeries | str_ = NoInput(0),
         # meta parameters
@@ -357,7 +352,6 @@ class STIRFuture(_BaseInstrument):
             leg2_spread_compound_method=leg2_spread_compound_method,
             leg2_rate_fixings=leg2_rate_fixings,
             leg2_fixing_method=leg2_fixing_method,
-            leg2_method_param=leg2_method_param,
             leg2_fixing_series=leg2_fixing_series,
             leg2_fixing_frequency=leg2_fixing_frequency,
             # meta
@@ -375,6 +369,7 @@ class STIRFuture(_BaseInstrument):
             leg2_payment_lag=NoInput.inherit,
             leg2_ex_div=NoInput.inherit,
             leg2_convention=NoInput.inherit,
+            leg2_currency=NoInput.inherit,
             fixed_rate=NoInput(0) if isinstance(price, NoInput) else 100 - price,
             vol=_Vol(),
         )
@@ -426,16 +421,10 @@ class STIRFuture(_BaseInstrument):
             forward=forward,
         )[self.leg1.settlement_params.currency]
 
-        _curves: _Curves = self._parse_curves(curves)
-        _curves_meta: _Curves = self.kwargs.meta["curves"]
-        npv_immediate = (
-            local_npv
-            / _validate_base_curve(
-                _maybe_get_curve_maybe_from_solver(
-                    solver=solver, curves_meta=_curves_meta, curves=_curves, name="disc_curve"
-                )
-            )[self.leg1.settlement_params.payment]
-        )
+        c = _parse_curves(self, curves, solver)
+        disc_curve = _get_curve("disc_curve", False, False, *c)
+
+        npv_immediate = local_npv / disc_curve[self.leg1.settlement_params.payment]
 
         if not local:
             return _maybe_fx_converted(
@@ -463,6 +452,7 @@ class STIRFuture(_BaseInstrument):
                 solver=solver,
                 settlement=settlement,
                 forward=forward,
+                metric="rate",
             )
             self.leg1.fixed_rate = _dual_float(mid_market_rate)
 
@@ -478,32 +468,10 @@ class STIRFuture(_BaseInstrument):
         forward: datetime_ = NoInput(0),
         metric: str_ = NoInput(0),
     ) -> DualTypes:
-        _curves = self._parse_curves(curves)
+        c = _parse_curves(self, curves, solver)
+        leg2_rate_curve = _get_curve("leg2_rate_curve", True, True, *c)
         metric_ = _drb(self.kwargs.meta["metric"], metric).lower()
-
-        leg2_npv: DualTypes = self.leg2.local_npv(
-            rate_curve=_maybe_get_curve_or_dict_maybe_from_solver(
-                self.kwargs.meta["curves"], _curves, "leg2_rate_curve", solver
-            ),
-            disc_curve=_maybe_get_curve_maybe_from_solver(
-                self.kwargs.meta["curves"], _curves, "leg2_disc_curve", solver
-            ),
-            settlement=settlement,
-            forward=forward,
-        )
-        rate = (
-            self.leg1.spread(
-                target_npv=-leg2_npv,
-                rate_curve=NoInput(0),
-                disc_curve=_maybe_get_curve_maybe_from_solver(
-                    self.kwargs.meta["curves"], _curves, "disc_curve", solver
-                ),
-                index_curve=NoInput(0),
-                settlement=settlement,
-                forward=forward,
-            )
-            / 100
-        )
+        rate = self.leg2._regular_periods[0].rate(rate_curve=leg2_rate_curve)
         if metric_ == "price":
             return 100 - rate
         elif metric_ == "rate":
@@ -535,19 +503,14 @@ class STIRFuture(_BaseInstrument):
             forward=forward,
             leg=leg,
         )[self.leg1.settlement_params.currency]
-        _curves: _Curves = self._parse_curves(curves)
-        _curves_meta: _Curves = self.kwargs.meta["curves"]
+
+        c = _parse_curves(self, curves, solver)
+
         prefix = "" if leg == 1 else "leg2_"
+        disc_curve = _get_curve(f"{prefix}disc_curve", False, False, *c)
+
         adjusted_local_analytic_delta = (
-            unadjusted_local_analytic_delta
-            / _validate_base_curve(
-                _maybe_get_curve_maybe_from_solver(
-                    solver=solver,
-                    curves_meta=_curves_meta,
-                    curves=_curves,
-                    name=f"{prefix}disc_curve",
-                )
-            )[self.leg1.settlement_params.payment]
+            unadjusted_local_analytic_delta / disc_curve[self.leg1.settlement_params.payment]
         )
         return _maybe_local(
             value=adjusted_local_analytic_delta,
@@ -576,16 +539,9 @@ class STIRFuture(_BaseInstrument):
             settlement=settlement,
             forward=forward,
         )
-        _curves: _Curves = self._parse_curves(curves)
-        _curves_meta: _Curves = self.kwargs.meta["curves"]
-        return (
-            df  # type: ignore[operator]
-            / _validate_base_curve(
-                _maybe_get_curve_or_dict_maybe_from_solver(
-                    solver=solver, curves_meta=_curves_meta, curves=_curves, name="leg2_disc_curve"
-                )
-            )[self.leg1.settlement_params.payment]
-        )
+        c = _parse_curves(self, curves, solver)
+        disc_curve = _get_curve("leg2_disc_curve", False, False, *c)
+        return df / disc_curve[self.leg1.settlement_params.payment]  # type: ignore[operator]
 
     def cashflows(
         self,
@@ -609,11 +565,9 @@ class STIRFuture(_BaseInstrument):
         )
         df[defaults.headers["payment"]] = None
 
-        _curves: _Curves = self._parse_curves(curves)
-        _curves_meta: _Curves = self.kwargs.meta["curves"]
-        disc_curve = _maybe_get_curve_object_maybe_from_solver(
-            solver=solver, curves_meta=_curves_meta, curves=_curves, name="disc_curve"
-        )
+        c = _parse_curves(self, curves, solver)
+        disc_curve = _get_curve("disc_curve", False, True, *c)
+
         if isinstance(disc_curve, NoInput):
             pass
         else:
