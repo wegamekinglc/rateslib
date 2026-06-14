@@ -12,7 +12,9 @@
 
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
+#[allow(unused_imports)]
 use rateslib::dual::{Dual, Number, NumberOps};
+#[allow(unused_imports)]
 use std::time::SystemTime;
 
 fn ops<T>(a: &T, b: &T) -> T
@@ -28,8 +30,8 @@ fn ops2(a: f64, b: &Dual) -> Dual {
 }
 
 fn main() -> PyResult<()> {
-    pyo3::prepare_freethreaded_python();
-    Python::with_gil(|py| {
+    Python::initialize();
+    Python::attach(|py| {
         let obj: Bound<'_, PyTuple> = (1_u32, 2.3_f64).into_pyobject(py).unwrap();
         let ext: PyResult<(u32, f64)> = obj.extract();
         println!("{:?}", ext);
